@@ -3,8 +3,27 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/)
 
 A novel neural architecture that uses **time-embedded tokens** to enable **experiential learning during inference**. Tokens accumulate experience through usage, allowing models to "know what they know."
+
+## 🚀 **ZERO-SETUP EXECUTION ON COLAB/KAGGLE!**
+
+**Just clone and run - no configuration needed!**
+
+### Quick Start (Colab/Kaggle):
+```python
+!git clone https://github.com/PlanetDestroyyer/TEMPORAL.git
+%cd TEMPORAL/temporal_prototype
+!pip install -q torch numpy matplotlib seaborn scipy tqdm datasets transformers
+!python run_all.py
+```
+
+**Or use the notebook**: [TEMPORAL_Colab.ipynb](TEMPORAL_Colab.ipynb)
+
+📖 **Detailed Colab/Kaggle instructions**: [COLAB_QUICKSTART.md](COLAB_QUICKSTART.md)
+
+---
 
 ## 🎯 Core Idea
 
@@ -117,6 +136,21 @@ Update Time Embeddings  ← Key innovation!
 - **Dimensions**: 128 content + 128 time = 256 total
 - **Vocabulary**: 1,000 tokens (configurable)
 - **Context**: 128 tokens
+
+## 📚 Dataset
+
+**WikiText-2** via HuggingFace `datasets` library
+
+- **Source**: Automatically downloaded on first run
+- **Size**: ~4MB (2.5M training tokens)
+- **Type**: Clean English Wikipedia text
+- **Perfect for**: Fast prototyping and experimentation
+
+**Fallback**: If WikiText-2 download fails, the code automatically generates synthetic data for testing.
+
+**To use a different dataset**: Edit `train.py` line 70-80 to load your custom dataset.
+
+---
 
 ## 📁 Project Structure
 

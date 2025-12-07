@@ -1,137 +1,110 @@
 """
-Time Embedding Layer for TEMPORAL architecture.
-Manages mutable time embeddings that update based on token usage.
+Self-Learning Time Embeddings for TEMPORAL Architecture
+Time embeddings learn what "experience" means through gradients, not hardcoded rules.
 """
 
 import torch
 import torch.nn as nn
-import numpy as np
-from collections import defaultdict
+import torch.nn.functional as F
 
 
 class TimeEmbeddings(nn.Module):
     """
-    Time embedding layer that maintains and updates time values for each token.
-    Time embeddings start at zero and increase with usage during both training and inference.
+    Self-learning time embeddings that discover temporal patterns through gradients.
+
+    Key Design:
+    - Time embeddings are LEARNED, not hardcoded
+    - Gradients flow through time just like content embeddings
+    - Model discovers what "experience" means by minimizing prediction loss
+    - Optional inference-time updates based on learned patterns
     """
 
-    def __init__(self, vocab_size, time_dim, time_lr=0.01):
+    def __init__(self, vocab_size, time_dim, learning_mode='gradient'):
         super().__init__()
         self.vocab_size = vocab_size
         self.time_dim = time_dim
-        self.time_lr = time_lr
+        self.learning_mode = learning_mode  # 'gradient' or 'hybrid'
 
-        # Initialize time embeddings to zero (learnable but updated via custom mechanism)
+        # Time embeddings - initialized to zeros, learns from scratch
+        # CRITICAL: requires_grad=True so gradients flow
         self.time_embeddings = nn.Parameter(
             torch.zeros(vocab_size, time_dim),
-            requires_grad=True
+            requires_grad=True  # SELF-LEARNING: gradients update this
         )
 
-        # Statistics tracking (not part of model parameters)
+        # Statistics for analysis (not used in forward pass)
         self.register_buffer('usage_counts', torch.zeros(vocab_size))
-        self.register_buffer('last_used_step', torch.zeros(vocab_size))
-        self.register_buffer('context_diversity', torch.zeros(vocab_size))
+        self.register_buffer('last_seen_step', torch.zeros(vocab_size))
+        self.global_step = 0
 
-        self.current_step = 0
+        # Optional: Learnable update mechanism for inference
+        # This learns HOW to update time, not what to update
+        if learning_mode == 'hybrid':
+            self.update_mlp = nn.Sequential(
+                nn.Linear(time_dim + 1, time_dim),  # +1 for confidence score
+                nn.Tanh(),
+                nn.Linear(time_dim, time_dim)
+            )
 
-    def forward(self, token_ids):
+    def forward(self, token_ids, update_time=False, confidence_scores=None):
         """
-        Get time embeddings for given token IDs.
+        Get time embeddings for tokens.
 
         Args:
-            token_ids: Tensor of shape (batch_size, seq_len)
+            token_ids: [batch_size, seq_len]
+            update_time: Whether to update statistics (inference-time learning)
+            confidence_scores: [batch_size, seq_len] optional confidence for updates
 
         Returns:
-            time_emb: Tensor of shape (batch_size, seq_len, time_dim)
+            time_emb: [batch_size, seq_len, time_dim]
         """
-        return self.time_embeddings[token_ids]
+        # Get time embeddings - gradients flow through this automatically
+        time_emb = self.time_embeddings[token_ids]
 
-    def compute_update_vector(self, token_ids, contexts=None, confidence=None):
+        # Optional: Inference-time updates (not used during training)
+        if update_time and not self.training and self.learning_mode == 'hybrid':
+            time_emb = self._apply_inference_update(token_ids, time_emb, confidence_scores)
+
+        # Track statistics for analysis (doesn't affect gradients)
+        if update_time:
+            self._update_statistics(token_ids)
+
+        return time_emb
+
+    def _apply_inference_update(self, token_ids, time_emb, confidence_scores):
         """
-        Compute the update vector for time embeddings based on usage.
-
-        Args:
-            token_ids: Tensor of shape (batch_size, seq_len)
-            contexts: Optional context representations for diversity calculation
-            confidence: Optional prediction confidence scores
-
-        Returns:
-            update_vectors: Tensor of shape (batch_size, seq_len, time_dim)
-        """
-        batch_size, seq_len = token_ids.shape
-        device = token_ids.device
-
-        # Initialize update vector
-        update_vectors = torch.zeros(batch_size, seq_len, self.time_dim, device=device)
-
-        # Dimension 0: Usage count increment (constant increment)
-        update_vectors[:, :, 0] = 1.0
-
-        # Dimension 1: Recency score (higher for recent steps)
-        # Compute recency as 1.0 / (steps_since_last_use + 1)
-        for b in range(batch_size):
-            for s in range(seq_len):
-                token_id = token_ids[b, s].item()
-                steps_since = self.current_step - self.last_used_step[token_id].item()
-                recency = 1.0 / (steps_since + 1.0)
-                update_vectors[b, s, 1] = recency
-
-        # Dimension 2: Context diversity score
-        # Simple version: increment if token appears in new context
-        if contexts is not None:
-            # contexts: (batch_size, seq_len, hidden_dim)
-            for b in range(batch_size):
-                for s in range(seq_len):
-                    token_id = token_ids[b, s].item()
-                    # Simplified: use a small increment to represent diversity
-                    update_vectors[b, s, 2] = 0.1
-
-        # Dimension 3: Prediction confidence
-        if confidence is not None:
-            update_vectors[:, :, 3] = confidence
-
-        # Dimensions 4-127: Will be updated through gradient-based learning
-        # These are learned automatically through backprop on the time embeddings
-        # We don't manually set them here
-
-        return update_vectors
-
-    def update_time_embeddings(self, token_ids, contexts=None, confidence=None):
-        """
-        Update time embeddings based on token usage.
-        This is called during forward pass to accumulate experience.
-
-        Args:
-            token_ids: Tensor of shape (batch_size, seq_len)
-            contexts: Optional context representations
-            confidence: Optional prediction confidence scores
+        Optional: Update time during inference based on LEARNED patterns.
+        This is NOT hardcoded - the update_mlp learns how to update.
         """
         with torch.no_grad():
-            # Compute update vectors
-            update_vectors = self.compute_update_vector(token_ids, contexts, confidence)
+            if confidence_scores is None:
+                confidence_scores = torch.ones_like(token_ids, dtype=torch.float32)
 
-            # Update time embeddings for each token
+            # Learnable update (model figures out what this means)
+            conf_expanded = confidence_scores.unsqueeze(-1)
+            update_input = torch.cat([time_emb, conf_expanded], dim=-1)
+            delta = self.update_mlp(update_input)
+
+            # Apply update to original embeddings (persistent)
             batch_size, seq_len = token_ids.shape
             for b in range(batch_size):
                 for s in range(seq_len):
-                    token_id = token_ids[b, s].item()
+                    tid = token_ids[b, s].item()
+                    self.time_embeddings.data[tid] += 0.01 * delta[b, s]
 
-                    # Update time embedding
-                    self.time_embeddings.data[token_id] += self.time_lr * update_vectors[b, s]
+        return self.time_embeddings[token_ids]
 
-                    # Update statistics
-                    self.usage_counts[token_id] += 1
-                    self.last_used_step[token_id] = self.current_step
+    def _update_statistics(self, token_ids):
+        """Track statistics for analysis (not used in model)"""
+        with torch.no_grad():
+            unique_tokens = token_ids.unique()
+            for tid in unique_tokens:
+                self.usage_counts[tid] += (token_ids == tid).sum()
+                self.last_seen_step[tid] = self.global_step
+            self.global_step += 1
 
-            self.current_step += 1
-
-    def get_time_statistics(self):
-        """
-        Get statistics about time embeddings for analysis.
-
-        Returns:
-            dict with various statistics
-        """
+    def get_statistics(self):
+        """Get analysis statistics"""
         with torch.no_grad():
             time_magnitudes = torch.norm(self.time_embeddings, dim=1)
 
@@ -139,72 +112,93 @@ class TimeEmbeddings(nn.Module):
                 'mean_time_magnitude': time_magnitudes.mean().item(),
                 'max_time_magnitude': time_magnitudes.max().item(),
                 'min_time_magnitude': time_magnitudes.min().item(),
+                'std_time_magnitude': time_magnitudes.std().item(),
                 'usage_counts': self.usage_counts.cpu().numpy(),
-                'time_values_dim0': self.time_embeddings[:, 0].cpu().numpy(),
-                'time_values_dim1': self.time_embeddings[:, 1].cpu().numpy(),
                 'time_magnitudes': time_magnitudes.cpu().numpy(),
+                'time_embeddings_sample': self.time_embeddings[:10].cpu().numpy(),
             }
 
-    def reset_time_embeddings(self):
-        """Reset all time embeddings to zero (useful for experiments)"""
-        with torch.no_grad():
-            self.time_embeddings.zero_()
-            self.usage_counts.zero_()
-            self.last_used_step.zero_()
-            self.context_diversity.zero_()
-            self.current_step = 0
+    def reset_statistics(self):
+        """Reset tracking statistics"""
+        self.usage_counts.zero_()
+        self.last_seen_step.zero_()
+        self.global_step = 0
 
 
 class TimeEmbeddedTokenizer(nn.Module):
     """
-    Manages dual-component token representations: [content_embedding | time_embedding]
+    Manages [content | time] dual embeddings with self-learning time.
     """
 
-    def __init__(self, vocab_size, content_dim, time_dim, time_lr=0.01):
+    def __init__(self, vocab_size, content_dim, time_dim, learning_mode='gradient'):
         super().__init__()
         self.vocab_size = vocab_size
         self.content_dim = content_dim
         self.time_dim = time_dim
         self.total_dim = content_dim + time_dim
 
-        # Content embeddings (learned normally via backprop)
+        # Content embeddings (standard)
         self.content_embeddings = nn.Embedding(vocab_size, content_dim)
 
-        # Time embeddings (updated via usage-based mechanism)
-        self.time_embeddings = TimeEmbeddings(vocab_size, time_dim, time_lr)
+        # Time embeddings (self-learning)
+        self.time_embeddings = TimeEmbeddings(vocab_size, time_dim, learning_mode)
 
-    def forward(self, token_ids, update_time=True, contexts=None, confidence=None):
+        # Initialize content embeddings
+        nn.init.normal_(self.content_embeddings.weight, mean=0.0, std=0.02)
+
+    def forward(self, token_ids, update_time=False, confidence_scores=None):
         """
-        Get dual-component embeddings for tokens.
+        Get [content | time] embeddings.
 
-        Args:
-            token_ids: Tensor of shape (batch_size, seq_len)
-            update_time: Whether to update time embeddings based on usage
-            contexts: Optional context representations
-            confidence: Optional confidence scores
-
-        Returns:
-            embeddings: Tensor of shape (batch_size, seq_len, content_dim + time_dim)
+        During training: Both content and time learn through gradients
+        During inference: Optional time updates based on usage
         """
-        # Get content embeddings
+        # Content embeddings
         content_emb = self.content_embeddings(token_ids)
 
-        # Get time embeddings
-        time_emb = self.time_embeddings(token_ids)
+        # Time embeddings (learns through gradients!)
+        time_emb = self.time_embeddings(token_ids, update_time, confidence_scores)
 
         # Concatenate [content | time]
         embeddings = torch.cat([content_emb, time_emb], dim=-1)
 
-        # Update time embeddings if requested (during training and inference)
-        if update_time:
-            self.time_embeddings.update_time_embeddings(token_ids, contexts, confidence)
-
         return embeddings
 
     def get_time_statistics(self):
-        """Get time embedding statistics"""
-        return self.time_embeddings.get_time_statistics()
+        """Get time embedding statistics for analysis"""
+        return self.time_embeddings.get_statistics()
 
-    def reset_time_embeddings(self):
-        """Reset time embeddings to zero"""
-        self.time_embeddings.reset_time_embeddings()
+    def analyze_learned_patterns(self):
+        """
+        Analyze what patterns the time embeddings discovered.
+        This is for research analysis - shows what the model learned.
+        """
+        stats = self.get_time_statistics()
+        time_matrix = self.time_embeddings.time_embeddings.detach().cpu()
+        usage = torch.tensor(stats['usage_counts'])
+
+        # Analyze each dimension
+        analysis = {'dimensions': []}
+
+        for dim in range(min(self.time_dim, 10)):  # Analyze first 10 dims
+            dim_values = time_matrix[:, dim]
+
+            # Correlation with frequency
+            mask = usage > 0
+            if mask.sum() > 10:
+                freq_corr = torch.corrcoef(torch.stack([
+                    dim_values[mask],
+                    usage[mask].float()
+                ]))[0, 1].item()
+            else:
+                freq_corr = 0.0
+
+            analysis['dimensions'].append({
+                'dim': dim,
+                'mean': dim_values.mean().item(),
+                'std': dim_values.std().item(),
+                'freq_correlation': freq_corr,
+                'range': (dim_values.min().item(), dim_values.max().item())
+            })
+
+        return analysis

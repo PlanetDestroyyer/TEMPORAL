@@ -1,74 +1,279 @@
 """
-Configuration file for TEMPORAL prototype.
-Contains hyperparameters for model architecture, training, and evaluation.
+Production Configuration for TEMPORAL
+SOTA settings for research-grade experiments
 """
 
-class Config:
-    # Model Architecture
-    vocab_size = 1000  # Small vocabulary for prototype
-    content_dim = 128  # Content embedding dimension
-    time_dim = 128     # Time embedding dimension (parallel to content)
-    total_dim = 256    # Total token representation [128 content | 128 time]
+class ProductionConfig:
+    """Production/Research-grade configuration"""
 
-    n_layers = 2       # Number of transformer layers
-    n_heads = 4        # Number of attention heads
-    ff_dim = 512       # Feedforward dimension
-    dropout = 0.1      # Dropout rate
-    max_seq_length = 128  # Maximum sequence length
+    # ============================================================================
+    # MODEL ARCHITECTURE (SOTA)
+    # ============================================================================
 
-    # Time Embedding Update Parameters
-    time_lr = 0.01     # Learning rate for time embedding updates
-    time_decay = 0.0   # Optional: decay rate for unused tokens (0 = no decay)
+    # Vocabulary & Embeddings
+    vocab_size = 50257  # GPT-2 tokenizer vocab size
+    content_dim = 384   # Content embedding dimension
+    time_dim = 384      # Time embedding dimension
+    total_dim = 768     # Total: 384 content + 384 time
 
-    # Time embedding dimensions allocation:
-    # dim 0: Usage count increment
-    # dim 1: Recency score
-    # dim 2: Context diversity score
-    # dim 3: Prediction confidence
-    # dim 4-127: Learned through gradient on prediction accuracy
+    # Transformer Architecture
+    n_layers = 12       # Standard for small models (GPT-2 small: 12)
+    n_heads = 12        # Should divide total_dim evenly
+    ff_dim = 3072       # 4x total_dim (standard practice)
+    dropout = 0.1       # Standard dropout
+    max_seq_length = 1024  # Context window
 
-    # Training Parameters
-    batch_size = 32
-    num_epochs = 10
-    learning_rate = 0.0003  # Learning rate for content embeddings and model params
-    weight_decay = 0.01
-    grad_clip = 1.0
-    warmup_steps = 100
+    # Model size: ~125M parameters (comparable to GPT-2 small)
 
-    # Dataset
+    # ============================================================================
+    # TIME EMBEDDING SETTINGS
+    # ============================================================================
+
+    time_learning_mode = 'gradient'  # 'gradient' or 'hybrid'
+    # 'gradient': Pure self-learning through backprop (recommended)
+    # 'hybrid': Gradient + optional inference-time updates
+
+    # ============================================================================
+    # DATASET (SOTA)
+    # ============================================================================
+
+    # Primary dataset
     dataset_name = "wikitext"
-    dataset_config = "wikitext-2-raw-v1"
+    dataset_config = "wikitext-103-raw-v1"  # Larger than wikitext-2
+    # Alternative options:
+    # - "EleutherAI/pile" (subset)
+    # - "allenai/c4" (en)
+    # - "togethercomputer/RedPajama-Data-1T-Sample"
 
-    # Logging and Checkpointing
-    log_interval = 100  # Log every N steps
-    eval_interval = 500  # Evaluate every N steps
-    save_interval = 1000  # Save checkpoint every N steps
+    # Tokenizer
+    tokenizer_name = "gpt2"  # or "EleutherAI/gpt-neo-125M"
 
-    # Visualization
-    track_tokens = [10, 50, 100, 200, 500]  # Specific tokens to track time evolution
+    # Preprocessing
+    block_size = 1024  # Sequence length for training
+    preprocessing_num_workers = 4
 
-    # Paths
-    checkpoint_dir = "checkpoints"
-    log_dir = "logs"
-    output_dir = "outputs"
+    # ============================================================================
+    # TRAINING (Production-Grade)
+    # ============================================================================
+
+    # Batch settings
+    batch_size = 8      # Per-device batch size
+    gradient_accumulation_steps = 16  # Effective batch = 8 * 16 = 128
+    effective_batch_size = batch_size * gradient_accumulation_steps
+
+    # Training duration
+    num_epochs = 3      # Standard for large datasets
+    max_steps = None    # Or set max steps instead of epochs
+
+    # Optimization (SOTA)
+    learning_rate = 3e-4        # Standard for transformers
+    weight_decay = 0.1          # AdamW weight decay
+    adam_beta1 = 0.9            # Adam beta1
+    adam_beta2 = 0.95           # Adam beta2 (LLaMA value)
+    adam_epsilon = 1e-8         # Adam epsilon
+    max_grad_norm = 1.0         # Gradient clipping
+
+    # Learning rate schedule
+    lr_scheduler_type = "cosine"  # cosine, linear, constant
+    warmup_ratio = 0.1            # 10% warmup
+    warmup_steps = None           # Or set explicit warmup steps
+
+    # Mixed precision
+    fp16 = False        # FP16 training (if supported)
+    bf16 = True         # BF16 training (better for modern GPUs)
+
+    # ============================================================================
+    # EVALUATION
+    # ============================================================================
+
+    eval_strategy = "steps"     # "steps" or "epoch"
+    eval_steps = 500            # Evaluate every N steps
+    eval_batch_size = 16        # Larger batch for evaluation
+
+    # Metrics
+    metric_for_best_model = "eval_loss"
+    greater_is_better = False
+
+    # ============================================================================
+    # LOGGING & CHECKPOINTING
+    # ============================================================================
+
+    # Logging
+    logging_steps = 100
+    logging_first_step = True
+    log_level = "info"
+
+    # Checkpointing
+    save_strategy = "steps"
+    save_steps = 1000
+    save_total_limit = 3        # Keep only 3 best checkpoints
+
+    # Output directories
+    output_dir = "outputs/temporal_production"
+    logging_dir = "logs/temporal_production"
+    checkpoint_dir = "checkpoints/temporal_production"
+
+    # ============================================================================
+    # EXPERIMENT TRACKING
+    # ============================================================================
+
+    # Weights & Biases
+    use_wandb = True
+    wandb_project = "temporal-research"
+    wandb_entity = None  # Your wandb username/team
+    run_name = None      # Auto-generated if None
+
+    # ============================================================================
+    # HARDWARE & PERFORMANCE
+    # ============================================================================
 
     # Device
-    device = "cuda" # Will be set to "cpu" if CUDA not available
+    device = "cuda"  # Will auto-detect
+    use_cpu = False
 
-    # Random seed
+    # Multi-GPU
+    local_rank = -1              # For distributed training
+    ddp_find_unused_parameters = False
+
+    # Performance optimizations
+    dataloader_num_workers = 4
+    dataloader_pin_memory = True
+    torch_compile = False        # PyTorch 2.0 compile (experimental)
+
+    # ============================================================================
+    # REPRODUCIBILITY
+    # ============================================================================
+
     seed = 42
+    deterministic = True
 
-    @classmethod
-    def get_baseline_config(cls):
-        """Returns config for baseline model (no time embeddings)"""
-        config = cls()
-        config.use_time_embeddings = False
-        config.total_dim = 256  # All 256 dims for content only
-        return config
+    # ============================================================================
+    # DEBUGGING
+    # ============================================================================
 
-    @classmethod
-    def get_temporal_config(cls):
-        """Returns config for TEMPORAL model (with time embeddings)"""
-        config = cls()
-        config.use_time_embeddings = True
-        return config
+    debug = False
+    max_train_samples = None  # Limit training samples for debugging
+    max_eval_samples = None   # Limit eval samples for debugging
+
+
+class Colab Config(ProductionConfig):
+    """Optimized for Google Colab (Free Tier: T4 GPU, 12GB RAM)"""
+
+    # Reduce model size for Colab
+    content_dim = 256
+    time_dim = 256
+    total_dim = 512
+    n_layers = 6
+    n_heads = 8
+    ff_dim = 2048
+
+    # Smaller batches
+    batch_size = 4
+    gradient_accumulation_steps = 8
+    max_seq_length = 512
+
+    # Fewer epochs (faster experimentation)
+    num_epochs = 2
+
+    # Dataset
+    dataset_config = "wikitext-2-raw-v1"  # Smaller dataset
+
+    # Model size: ~40M parameters
+
+
+class FastDebugConfig(ProductionConfig):
+    """Quick debugging configuration"""
+
+    # Tiny model
+    content_dim = 128
+    time_dim = 128
+    total_dim = 256
+    n_layers = 2
+    n_heads = 4
+    ff_dim = 512
+
+    # Tiny dataset
+    dataset_config = "wikitext-2-raw-v1"
+    max_train_samples = 1000
+    max_eval_samples = 100
+
+    # Fast training
+    num_epochs = 1
+    batch_size = 2
+    gradient_accumulation_steps = 2
+    eval_steps = 50
+    save_steps = 100
+
+    # Debug mode
+    debug = True
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def get_config(config_name="production"):
+    """Get configuration by name"""
+    configs = {
+        "production": ProductionConfig(),
+        "colab": ColabConfig(),
+        "debug": FastDebugConfig(),
+    }
+    return configs.get(config_name, ProductionConfig())
+
+
+def print_config(config):
+    """Print configuration summary"""
+    print("\n" + "="*70)
+    print("CONFIGURATION SUMMARY")
+    print("="*70)
+
+    print(f"\nModel Architecture:")
+    print(f"  Vocab Size: {config.vocab_size:,}")
+    print(f"  Content Dim: {config.content_dim}")
+    print(f"  Time Dim: {config.time_dim}")
+    print(f"  Total Dim: {config.total_dim}")
+    print(f"  Layers: {config.n_layers}")
+    print(f"  Heads: {config.n_heads}")
+    print(f"  FFN Dim: {config.ff_dim}")
+
+    # Estimate parameters
+    params = estimate_parameters(config)
+    print(f"  Estimated Parameters: {params/1e6:.1f}M")
+
+    print(f"\nDataset:")
+    print(f"  Name: {config.dataset_name}")
+    print(f"  Config: {config.dataset_config}")
+    print(f"  Block Size: {config.block_size}")
+
+    print(f"\nTraining:")
+    print(f"  Batch Size (per device): {config.batch_size}")
+    print(f"  Gradient Accumulation: {config.gradient_accumulation_steps}")
+    print(f"  Effective Batch Size: {config.effective_batch_size}")
+    print(f"  Learning Rate: {config.learning_rate}")
+    print(f"  Epochs: {config.num_epochs}")
+    print(f"  Mixed Precision: FP16={config.fp16}, BF16={config.bf16}")
+
+    print(f"\nTime Learning:")
+    print(f"  Mode: {config.time_learning_mode}")
+
+    print("="*70 + "\n")
+
+
+def estimate_parameters(config):
+    """Estimate total model parameters"""
+    # Embeddings
+    content_emb = config.vocab_size * config.content_dim
+    time_emb = config.vocab_size * config.time_dim
+
+    # Each transformer layer
+    # Attention: 4 * d^2 (QKV + output projection)
+    # FFN: 2 * d * ff_dim
+    layer_params = (4 * config.total_dim ** 2) + (2 * config.total_dim * config.ff_dim)
+    total_layers = config.n_layers * layer_params
+
+    # Output projection
+    output_proj = config.total_dim * config.vocab_size
+
+    total = content_emb + time_emb + total_layers + output_proj
+    return total

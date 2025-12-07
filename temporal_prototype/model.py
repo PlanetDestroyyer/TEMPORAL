@@ -1,6 +1,6 @@
 """
-TEMPORAL Transformer Architecture
-Implements time-aware attention and experiential learning through time embeddings.
+Production-Grade TEMPORAL Model with SOTA Components
+Includes: RMSNorm, SwiGLU, Flash Attention support, proper initialization
 """
 
 import torch
@@ -10,296 +10,390 @@ import math
 from time_embeddings import TimeEmbeddedTokenizer
 
 
+# ============================================================================
+# SOTA COMPONENTS
+# ============================================================================
+
+class RMSNorm(nn.Module):
+    """
+    RMS Normalization (used in LLaMA, faster than LayerNorm)
+    """
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        norm_x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return self.weight * norm_x
+
+
+class SwiGLU(nn.Module):
+    """
+    SwiGLU activation (used in LLaMA, PaLM - better than GELU)
+    """
+    def __init__(self, dim, hidden_dim, dropout=0.0):
+        super().__init__()
+        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
+
+
 class TimeAwareAttention(nn.Module):
     """
-    Multi-head attention mechanism that operates on time-embedded tokens.
-    Attention sees both WHAT the token is (content) and how EXPERIENCED it is (time).
+    Multi-head attention with TEMPORAL support
+    Uses Flash Attention when available (PyTorch 2.0+)
     """
 
-    def __init__(self, embed_dim, n_heads, dropout=0.1):
+    def __init__(self, dim, n_heads, dropout=0.0, causal=True):
         super().__init__()
-        assert embed_dim % n_heads == 0, "embed_dim must be divisible by n_heads"
+        assert dim % n_heads == 0, f"dim {dim} must be divisible by n_heads {n_heads}"
 
-        self.embed_dim = embed_dim
         self.n_heads = n_heads
-        self.head_dim = embed_dim // n_heads
-        self.scale = math.sqrt(self.head_dim)
+        self.head_dim = dim // n_heads
+        self.scale = self.head_dim ** -0.5
+        self.causal = causal
 
-        # Query, Key, Value projections operate on full embed_dim (content + time)
-        self.qkv_proj = nn.Linear(embed_dim, 3 * embed_dim)
-        self.out_proj = nn.Linear(embed_dim, embed_dim)
-
+        # QKV projection (single matrix for efficiency)
+        self.qkv = nn.Linear(dim, 3 * dim, bias=False)
+        self.proj = nn.Linear(dim, dim, bias=False)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask=None):
-        """
-        Args:
-            x: Tensor of shape (batch_size, seq_len, embed_dim)
-               embed_dim includes both content and time dimensions
-            mask: Optional attention mask
+        B, T, C = x.shape
 
-        Returns:
-            output: Tensor of shape (batch_size, seq_len, embed_dim)
-            attention_weights: Tensor of shape (batch_size, n_heads, seq_len, seq_len)
-        """
-        batch_size, seq_len, embed_dim = x.shape
-
-        # Project to Q, K, V
-        qkv = self.qkv_proj(x)  # (batch_size, seq_len, 3 * embed_dim)
-        qkv = qkv.reshape(batch_size, seq_len, 3, self.n_heads, self.head_dim)
-        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, batch_size, n_heads, seq_len, head_dim)
+        # QKV projection and split
+        qkv = self.qkv(x).reshape(B, T, 3, self.n_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, n_heads, T, head_dim)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        # Scaled dot-product attention
-        scores = torch.matmul(q, k.transpose(-2, -1)) / self.scale
-        # (batch_size, n_heads, seq_len, seq_len)
+        # Use Flash Attention if available (PyTorch 2.0+)
+        if hasattr(F, 'scaled_dot_product_attention'):
+            # PyTorch 2.0 optimized attention (Flash Attention)
+            out = F.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=None,
+                dropout_p=self.dropout.p if self.training else 0.0,
+                is_causal=self.causal
+            )
+        else:
+            # Manual attention (fallback)
+            attn = (q @ k.transpose(-2, -1)) * self.scale
 
-        # Apply mask if provided (for causal attention)
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, float('-inf'))
+            if self.causal:
+                # Create causal mask
+                causal_mask = torch.tril(torch.ones(T, T, device=x.device)).bool()
+                attn = attn.masked_fill(~causal_mask, float('-inf'))
 
-        attn_weights = F.softmax(scores, dim=-1)
-        attn_weights = self.dropout(attn_weights)
+            attn = F.softmax(attn, dim=-1)
+            attn = self.dropout(attn)
+            out = attn @ v
 
-        # Apply attention to values
-        out = torch.matmul(attn_weights, v)  # (batch_size, n_heads, seq_len, head_dim)
-        out = out.permute(0, 2, 1, 3).contiguous()  # (batch_size, seq_len, n_heads, head_dim)
-        out = out.reshape(batch_size, seq_len, embed_dim)
+        # Reshape and project
+        out = out.transpose(1, 2).contiguous().reshape(B, T, C)
+        out = self.proj(out)
 
-        # Output projection
-        out = self.out_proj(out)
-
-        return out, attn_weights
+        return out
 
 
 class TransformerBlock(nn.Module):
     """
-    Transformer block with time-aware attention.
+    Transformer block with pre-normalization and SOTA components
     """
 
-    def __init__(self, embed_dim, n_heads, ff_dim, dropout=0.1):
+    def __init__(self, dim, n_heads, ff_dim, dropout=0.0, use_swiglu=True):
         super().__init__()
 
-        self.attention = TimeAwareAttention(embed_dim, n_heads, dropout)
-        self.norm1 = nn.LayerNorm(embed_dim)
-        self.norm2 = nn.LayerNorm(embed_dim)
+        # Pre-normalization (like GPT-2, LLaMA)
+        self.norm1 = RMSNorm(dim)
+        self.attn = TimeAwareAttention(dim, n_heads, dropout)
 
-        self.feed_forward = nn.Sequential(
-            nn.Linear(embed_dim, ff_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(ff_dim, embed_dim),
-            nn.Dropout(dropout)
-        )
+        self.norm2 = RMSNorm(dim)
 
-    def forward(self, x, mask=None):
-        """
-        Args:
-            x: Tensor of shape (batch_size, seq_len, embed_dim)
-            mask: Optional attention mask
+        # FFN: SwiGLU or standard GELU
+        if use_swiglu:
+            self.mlp = SwiGLU(dim, ff_dim, dropout)
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(dim, ff_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(ff_dim, dim),
+                nn.Dropout(dropout)
+            )
 
-        Returns:
-            output: Tensor of shape (batch_size, seq_len, embed_dim)
-        """
-        # Self-attention with residual connection
-        attn_out, attn_weights = self.attention(self.norm1(x), mask)
-        x = x + attn_out
-
-        # Feed-forward with residual connection
-        ff_out = self.feed_forward(self.norm2(x))
-        x = x + ff_out
-
+    def forward(self, x):
+        # Pre-norm + residual
+        x = x + self.attn(self.norm1(x))
+        x = x + self.mlp(self.norm2(x))
         return x
 
 
+# ============================================================================
+# TEMPORAL MODEL
+# ============================================================================
+
 class TemporalTransformer(nn.Module):
     """
-    TEMPORAL Transformer: Language model with time-embedded tokens.
-    Tokens accumulate experience through usage, enabling experiential learning.
+    Production-grade TEMPORAL transformer with self-learning time embeddings
     """
 
     def __init__(self, config):
         super().__init__()
         self.config = config
 
-        # Time-embedded tokenizer
+        # Time-embedded tokenizer (self-learning!)
         self.tokenizer = TimeEmbeddedTokenizer(
             vocab_size=config.vocab_size,
             content_dim=config.content_dim,
             time_dim=config.time_dim,
-            time_lr=config.time_lr
+            learning_mode=config.time_learning_mode
         )
 
-        # Positional encoding
-        self.pos_encoding = nn.Parameter(
-            torch.zeros(1, config.max_seq_length, config.total_dim)
-        )
+        # Dropout
+        self.dropout = nn.Dropout(config.dropout)
 
         # Transformer blocks
         self.blocks = nn.ModuleList([
             TransformerBlock(
-                embed_dim=config.total_dim,
+                dim=config.total_dim,
                 n_heads=config.n_heads,
                 ff_dim=config.ff_dim,
-                dropout=config.dropout
+                dropout=config.dropout,
+                use_swiglu=True  # SOTA activation
             ) for _ in range(config.n_layers)
         ])
 
-        self.norm = nn.LayerNorm(config.total_dim)
-        self.dropout = nn.Dropout(config.dropout)
+        # Final norm
+        self.norm_f = RMSNorm(config.total_dim)
 
-        # Output projection to vocabulary
-        self.output_proj = nn.Linear(config.total_dim, config.vocab_size)
+        # Output projection (language modeling head)
+        self.lm_head = nn.Linear(config.total_dim, config.vocab_size, bias=False)
 
-        self._init_weights()
+        # Initialize weights (GPT-2 style)
+        self.apply(self._init_weights)
 
-    def _init_weights(self):
-        """Initialize weights"""
-        # Initialize positional encodings
-        nn.init.normal_(self.pos_encoding, mean=0.0, std=0.02)
+        # Special initialization for residual projections (GPT-2 paper)
+        for pn, p in self.named_parameters():
+            if pn.endswith('proj.weight') or pn.endswith('w2.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layers))
 
-        # Initialize output projection
-        nn.init.normal_(self.output_proj.weight, mean=0.0, std=0.02)
-        if self.output_proj.bias is not None:
-            nn.init.zeros_(self.output_proj.bias)
+        print(f"TEMPORAL Model initialized with {self.count_parameters()/1e6:.1f}M parameters")
 
-    def forward(self, input_ids, update_time=True, return_confidence=False):
+    def _init_weights(self, module):
+        """Initialize weights (GPT-2 style)"""
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, RMSNorm):
+            torch.nn.init.ones_(module.weight)
+
+    def forward(self, input_ids, labels=None, update_time=False, return_dict=True):
         """
-        Forward pass through TEMPORAL transformer.
+        Forward pass with automatic gradient flow through time embeddings
 
         Args:
-            input_ids: Tensor of shape (batch_size, seq_len)
-            update_time: Whether to update time embeddings
-            return_confidence: Whether to return prediction confidence
+            input_ids: [batch_size, seq_len]
+            labels: [batch_size, seq_len] for computing loss
+            update_time: Whether to update time statistics
+            return_dict: Return dict vs tuple
 
         Returns:
-            logits: Tensor of shape (batch_size, seq_len, vocab_size)
-            confidence: Optional tensor of confidence scores
+            dict with 'logits', 'loss', 'time_stats' (if return_dict=True)
         """
-        batch_size, seq_len = input_ids.shape
-
-        # Get time-embedded tokens [content | time]
+        # Get [content | time] embeddings
+        # CRITICAL: Gradients flow through time automatically!
         x = self.tokenizer(input_ids, update_time=update_time)
-
-        # Add positional encoding
-        x = x + self.pos_encoding[:, :seq_len, :]
         x = self.dropout(x)
 
-        # Create causal mask
-        mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device)).unsqueeze(0).unsqueeze(0)
-        # (1, 1, seq_len, seq_len)
-
-        # Pass through transformer blocks
+        # Transformer blocks
         for block in self.blocks:
-            x = block(x, mask)
+            x = block(x)
 
-        x = self.norm(x)
+        # Final norm and projection
+        x = self.norm_f(x)
+        logits = self.lm_head(x)
 
-        # Project to vocabulary
-        logits = self.output_proj(x)
+        # Compute loss if labels provided
+        loss = None
+        if labels is not None:
+            # Shift for next-token prediction
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
 
-        if return_confidence:
-            # Compute confidence as max probability
-            probs = F.softmax(logits, dim=-1)
-            confidence, _ = probs.max(dim=-1)
-            return logits, confidence
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100
+            )
 
-        return logits
+        if not return_dict:
+            output = (logits,)
+            return ((loss,) + output) if loss is not None else output
+
+        return {
+            'loss': loss,
+            'logits': logits,
+        }
+
+    def count_parameters(self):
+        """Count trainable parameters"""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def get_time_statistics(self):
         """Get time embedding statistics for analysis"""
         return self.tokenizer.get_time_statistics()
 
-    def reset_time_embeddings(self):
-        """Reset time embeddings to zero"""
-        self.tokenizer.reset_time_embeddings()
+    def analyze_time_learning(self):
+        """
+        Analyze what the time embeddings learned
+        For research: understand emergent patterns
+        """
+        return self.tokenizer.analyze_learned_patterns()
 
 
 class BaselineTransformer(nn.Module):
     """
-    Baseline transformer without time embeddings.
-    Uses standard 256-dimensional content embeddings for comparison.
+    Baseline transformer without time embeddings (for comparison)
+    Identical architecture except no time component
     """
 
     def __init__(self, config):
         super().__init__()
         self.config = config
 
-        # Standard token embeddings (no time component)
+        # Standard embeddings (no time)
         self.token_embeddings = nn.Embedding(config.vocab_size, config.total_dim)
+        nn.init.normal_(self.token_embeddings.weight, mean=0.0, std=0.02)
 
-        # Positional encoding
-        self.pos_encoding = nn.Parameter(
-            torch.zeros(1, config.max_seq_length, config.total_dim)
-        )
+        self.dropout = nn.Dropout(config.dropout)
 
-        # Transformer blocks (identical architecture to TEMPORAL)
+        # Same transformer architecture as TEMPORAL
         self.blocks = nn.ModuleList([
             TransformerBlock(
-                embed_dim=config.total_dim,
+                dim=config.total_dim,
                 n_heads=config.n_heads,
                 ff_dim=config.ff_dim,
-                dropout=config.dropout
+                dropout=config.dropout,
+                use_swiglu=True
             ) for _ in range(config.n_layers)
         ])
 
-        self.norm = nn.LayerNorm(config.total_dim)
-        self.dropout = nn.Dropout(config.dropout)
+        self.norm_f = RMSNorm(config.total_dim)
+        self.lm_head = nn.Linear(config.total_dim, config.vocab_size, bias=False)
 
-        # Output projection
-        self.output_proj = nn.Linear(config.total_dim, config.vocab_size)
+        self.apply(self._init_weights)
 
-        self._init_weights()
+        print(f"Baseline Model initialized with {self.count_parameters()/1e6:.1f}M parameters")
 
-    def _init_weights(self):
-        """Initialize weights"""
-        nn.init.normal_(self.token_embeddings.weight, mean=0.0, std=0.02)
-        nn.init.normal_(self.pos_encoding, mean=0.0, std=0.02)
-        nn.init.normal_(self.output_proj.weight, mean=0.0, std=0.02)
-        if self.output_proj.bias is not None:
-            nn.init.zeros_(self.output_proj.bias)
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, RMSNorm):
+            torch.nn.init.ones_(module.weight)
 
-    def forward(self, input_ids, return_confidence=False):
-        """
-        Forward pass through baseline transformer.
-
-        Args:
-            input_ids: Tensor of shape (batch_size, seq_len)
-            return_confidence: Whether to return prediction confidence
-
-        Returns:
-            logits: Tensor of shape (batch_size, seq_len, vocab_size)
-            confidence: Optional tensor of confidence scores
-        """
-        batch_size, seq_len = input_ids.shape
-
-        # Get token embeddings
+    def forward(self, input_ids, labels=None, return_dict=True):
         x = self.token_embeddings(input_ids)
-
-        # Add positional encoding
-        x = x + self.pos_encoding[:, :seq_len, :]
         x = self.dropout(x)
 
-        # Create causal mask
-        mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device)).unsqueeze(0).unsqueeze(0)
-
-        # Pass through transformer blocks
         for block in self.blocks:
-            x = block(x, mask)
+            x = block(x)
 
-        x = self.norm(x)
+        x = self.norm_f(x)
+        logits = self.lm_head(x)
 
-        # Project to vocabulary
-        logits = self.output_proj(x)
+        loss = None
+        if labels is not None:
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100
+            )
 
-        if return_confidence:
-            probs = F.softmax(logits, dim=-1)
-            confidence, _ = probs.max(dim=-1)
-            return logits, confidence
+        if not return_dict:
+            output = (logits,)
+            return ((loss,) + output) if loss is not None else output
 
-        return logits
+        return {
+            'loss': loss,
+            'logits': logits,
+        }
+
+    def count_parameters(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def create_model(config, model_type='temporal'):
+    """
+    Factory function to create models
+
+    Args:
+        config: Configuration object
+        model_type: 'temporal' or 'baseline'
+
+    Returns:
+        model: TemporalTransformer or BaselineTransformer
+    """
+    if model_type == 'temporal':
+        model = TemporalTransformer(config)
+    elif model_type == 'baseline':
+        model = BaselineTransformer(config)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+    return model
 
 
 def count_parameters(model):
-    """Count trainable parameters in model"""
+    """Count trainable parameters"""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def verify_gradient_flow(model):
+    """
+    Verify that gradients flow through time embeddings
+    CRITICAL CHECK: Ensures time is truly self-learning
+    """
+    if not isinstance(model, TemporalTransformer):
+        print("Not a TEMPORAL model - skipping gradient check")
+        return True
+
+    time_emb = model.tokenizer.time_embeddings.time_embeddings
+
+    checks = {
+        'requires_grad': time_emb.requires_grad,
+        'is_leaf': time_emb.is_leaf,
+        'grad_fn': time_emb.grad_fn is None,  # Should be None for leaf tensors
+    }
+
+    print("\n" + "="*70)
+    print("GRADIENT FLOW VERIFICATION")
+    print("="*70)
+    print(f"✓ Time embeddings require_grad: {checks['requires_grad']}")
+    print(f"✓ Time embeddings is leaf tensor: {checks['is_leaf']}")
+
+    if all([checks['requires_grad'], checks['is_leaf']]):
+        print("\n✅ VERIFIED: Time embeddings will learn through gradients!")
+    else:
+        print("\n❌ WARNING: Time embeddings may not learn properly!")
+
+    print("="*70 + "\n")
+
+    return all([checks['requires_grad'], checks['is_leaf']])

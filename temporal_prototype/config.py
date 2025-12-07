@@ -117,10 +117,11 @@ class ProductionConfig:
     # EXPERIMENT TRACKING
     # ============================================================================
 
-    # Weights & Biases
-    use_wandb = True
+    # Weights & Biases (disabled by default to avoid interactive prompts)
+    use_wandb = False
     wandb_project = "temporal-research"
     wandb_entity = None  # Your wandb username/team
+    wandb_api_key = None  # Set to your API key to enable: "0437ee052ff28e5c4dfd888f85c623eafb3857c0"
     run_name = None      # Auto-generated if None
 
     # ============================================================================

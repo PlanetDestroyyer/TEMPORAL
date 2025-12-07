@@ -203,6 +203,10 @@ class Trainer:
         # Weights & Biases
         self.use_wandb = config.use_wandb and WANDB_AVAILABLE
         if self.use_wandb:
+            # Login with API key if provided (avoids interactive prompt)
+            if hasattr(config, 'wandb_api_key') and config.wandb_api_key:
+                wandb.login(key=config.wandb_api_key)
+
             wandb.init(
                 project=config.wandb_project,
                 entity=config.wandb_entity,

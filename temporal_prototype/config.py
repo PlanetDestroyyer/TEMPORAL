@@ -156,7 +156,7 @@ class ProductionConfig:
     max_eval_samples = None   # Limit eval samples for debugging
 
 
-class Colab Config(ProductionConfig):
+class ColabConfig(ProductionConfig):
     """Optimized for Google Colab (Free Tier: T4 GPU, 12GB RAM)"""
 
     # Reduce model size for Colab

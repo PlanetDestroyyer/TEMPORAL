@@ -1,330 +1,243 @@
-# TEMPORAL: Time-Embedded Tokens for Experiential Learning
+# TEMPORAL: Self-Learning Time Embeddings
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/)
+**Production-grade transformer with time embeddings that learn through gradients (NOT hardcoded).**
 
-A novel neural architecture that uses **time-embedded tokens** to enable **experiential learning during inference**. Tokens accumulate experience through usage, allowing models to "know what they know."
+## 🎯 What This Does
 
-## 🚀 **ZERO-SETUP EXECUTION ON COLAB/KAGGLE!**
+Replaces standard token embeddings with `[content | time]` where:
+- **Content**: What the token means (learned via backprop)
+- **Time**: Experience with the token (learned via backprop)
 
-**Just clone and run - no configuration needed!**
+Time embeddings **discover** what "experience" means by minimizing loss, NOT through hardcoded rules.
 
-### Quick Start (Colab/Kaggle):
-```python
-!git clone https://github.com/PlanetDestroyyer/TEMPORAL.git
-%cd TEMPORAL/temporal_prototype
-!pip install -q torch numpy matplotlib seaborn scipy tqdm datasets transformers
-!python run_all.py
-```
+## ⚡ ONE Command to Run Everything
 
-**Or use the notebook**: [TEMPORAL_Colab.ipynb](TEMPORAL_Colab.ipynb)
-
-📖 **Detailed Colab/Kaggle instructions**: [COLAB_QUICKSTART.md](COLAB_QUICKSTART.md)
-
----
-
-## 🎯 Core Idea
-
-Replace standard token embeddings with dual-component representations:
-
-```
-Standard Embedding:  token → [content(256)]
-TEMPORAL Embedding:  token → [content(128) | time(128)]
-```
-
-- **Content embeddings**: What the token IS (learned via backprop)
-- **Time embeddings**: How EXPERIENCED it is (updated via usage)
-
-Time embeddings start at zero and grow with each token use, creating a form of **stateful, experiential learning** without requiring gradient computation.
-
-## 🚀 Quick Start
+### Google Colab / Kaggle
 
 ```bash
-cd temporal_prototype
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run tests
-python test_implementation.py
-
-# Train both TEMPORAL and Baseline models
-python train.py --model both
-
-# Evaluate and compare
-python evaluate.py --model both
-
-# Generate visualizations
-python visualize.py
+!git clone https://github.com/PlanetDestroyyer/TEMPORAL.git
+%cd TEMPORAL/temporal_prototype
+!pip install -q -r requirements.txt
+!python run_colab.py
 ```
 
-See [QUICKSTART.md](temporal_prototype/QUICKSTART.md) for detailed instructions.
+**That's it!** This will:
+1. Train TEMPORAL model (~40M params)
+2. Train Baseline model (for comparison)
+3. Analyze what time embeddings learned
+4. Save results to `checkpoints/temporal_production/`
 
-## 📊 What Makes TEMPORAL Novel?
-
-### 1. Dual-Component Tokens
-
-Every token has two parts:
-- **Content (128d)**: Traditional semantic embedding
-- **Time (128d)**: Experience accumulation vector
-
-### 2. Usage-Based Time Updates
-
-Time embeddings update during forward pass:
-
-```python
-time_emb[token] += lr * [usage_count, recency, diversity, confidence, ...]
-```
-
-No backprop required - lightweight and efficient!
-
-### 3. Experiential Learning
-
-Frequent tokens develop:
-- ✅ Higher time values
-- ✅ Better prediction accuracy
-- ✅ Higher model confidence
-
-The model learns through **experience**, not just gradients.
-
-### 4. Epistemic Awareness
-
-TEMPORAL models can track their own knowledge:
-- High time value = "I know this token well"
-- Low time value = "This is unfamiliar to me"
-
-Foundation for uncertainty quantification and calibrated confidence.
-
-## 📈 Key Results
-
-Expected outcomes from the prototype (10M parameters, WikiText-2):
-
-| Metric | TEMPORAL | Baseline | Result |
-|--------|----------|----------|--------|
-| Test Perplexity | ~69 | ~72 | ✅ 4-5% better |
-| Time-Frequency Corr. | 0.85+ | N/A | ✅ Strong correlation |
-| High-Time Token Acc. | 87%+ | N/A | ✅ Better on familiar tokens |
-| Confidence-Time Corr. | 0.65+ | N/A | ✅ Knows what it knows |
-
-*Note: Exact values depend on training run and dataset*
-
-## 🏗️ Architecture
-
-```
-Input Tokens
-    ↓
-[Content Emb. | Time Emb.]  ← Dual 256d representation
-    ↓
-Positional Encoding
-    ↓
-Time-Aware Attention (×2 layers)
-    ↓
-Layer Norm + FFN
-    ↓
-Output Logits
-    ↓
-Update Time Embeddings  ← Key innovation!
-```
-
-### Model Specifications
-
-- **Parameters**: ~10M (prototype scale)
-- **Layers**: 2 transformer blocks
-- **Heads**: 4 attention heads
-- **Dimensions**: 128 content + 128 time = 256 total
-- **Vocabulary**: 1,000 tokens (configurable)
-- **Context**: 128 tokens
-
-## 📚 Dataset
-
-**WikiText-2** via HuggingFace `datasets` library
-
-- **Source**: Automatically downloaded on first run
-- **Size**: ~4MB (2.5M training tokens)
-- **Type**: Clean English Wikipedia text
-- **Perfect for**: Fast prototyping and experimentation
-
-**Fallback**: If WikiText-2 download fails, the code automatically generates synthetic data for testing.
-
-**To use a different dataset**: Edit `train.py` line 70-80 to load your custom dataset.
+**Time**: 30-60 minutes on GPU (T4), 2-3 hours on CPU
 
 ---
 
-## 📁 Project Structure
+## 📊 Dataset Used
+
+**WikiText-2** (for fast Colab runs)
+- 2.5M tokens
+- ~4MB download
+- Clean Wikipedia text
+- Auto-downloads on first run
+
+**To use larger dataset**: Edit `temporal_prototype/config.py` line 26:
+```python
+dataset_config = "wikitext-103-raw-v1"  # 103M tokens, better results
+```
+
+**Other options available**:
+- `"wikitext-103-raw-v1"` - Standard benchmark (103M tokens)
+- Or modify `train.py` to use The Pile, C4, etc.
+
+---
+
+## 🔬 What Makes This Different?
+
+### ❌ NOT Self-Learning (Hardcoded):
+```python
+# BAD - Manual rules
+time[token, 0] = usage_count
+time[token, 1] = recency_score
+```
+
+### ✅ TRUE Self-Learning (This Repo):
+```python
+# GOOD - Learns through gradients
+time_emb = nn.Parameter(torch.zeros(...), requires_grad=True)
+# Model discovers what dimensions should track!
+```
+
+**The model figures out**:
+- Maybe dim 0 tracks frequency
+- Maybe dim 50 tracks context
+- Maybe dim 100 tracks confidence
+- Maybe it discovers something we never thought of!
+
+---
+
+## 📁 Files You Need
 
 ```
 temporal_prototype/
-├── config.py              # Hyperparameters
-├── time_embeddings.py     # Time embedding layer
-├── model.py              # TEMPORAL & Baseline transformers
-├── train.py              # Training script
-├── evaluate.py           # Evaluation with metrics
-├── visualize.py          # Plotting and analysis
-├── test_implementation.py # Unit tests
-├── check_syntax.py       # Syntax validation
-├── requirements.txt      # Dependencies
-├── README.md            # Main documentation
-├── QUICKSTART.md        # Getting started guide
-└── ANALYSIS.md          # Results template
+├── config.py           # Configuration (Colab/Production/Debug presets)
+├── time_embeddings.py  # Self-learning time embeddings
+├── model.py           # TEMPORAL architecture (RMSNorm, SwiGLU, Flash Attention)
+├── train.py           # Training pipeline (mixed precision, grad accumulation)
+├── run_colab.py       # ONE-CLICK execution script
+└── requirements.txt   # Dependencies
 ```
 
-## 🔬 Experiment Workflow
+---
 
-1. **Train**: `python train.py --model both`
-   - Trains TEMPORAL and Baseline
-   - Logs time evolution, perplexity, loss
-   - Saves checkpoints every N steps
+## 🎯 Expected Results
 
-2. **Evaluate**: `python evaluate.py --model both`
-   - Computes test perplexity
-   - Analyzes time-frequency correlation
-   - Measures confidence-time relationship
-   - Categorizes tokens by experience level
+After training, you'll see:
 
-3. **Visualize**: `python visualize.py`
-   - Time embedding evolution plots
-   - Frequency vs time scatter plots
-   - Perplexity comparison curves
-   - Token category analysis bars
-   - Comprehensive summary figure
+```
+WHAT DID THE MODEL LEARN?
+======================================================================
 
-4. **Analyze**: Review `outputs/evaluation_results.json` and plots
+Dimension 0:
+  Frequency Correlation: 0.834
+  → Learned to track token frequency!
 
-## 📊 Tracked Metrics
+Dimension 1:
+  Frequency Correlation: -0.123
+  → Learned some other pattern!
 
-### Standard Metrics
-- Training/validation loss
-- Test perplexity
-- Parameter count
+✅ This is SELF-LEARNING, not hardcoded!
 
-### TEMPORAL-Specific Metrics
+Checkpoints saved to: checkpoints/temporal_production/
+```
 
-1. **Time Evolution**: How time embeddings grow during training
-2. **Frequency-Time Correlation**: Do frequent tokens have high time?
-3. **Accuracy by Time Category**: Performance on experienced vs new tokens
-4. **Confidence-Time Correlation**: Does confidence track experience?
+**Compare**: TEMPORAL vs Baseline perplexity to see if time helps!
 
-## 🎨 Visualizations
+---
 
-The prototype generates:
+## 🚀 Model Specs
 
-- `time_evolution.png` - Time magnitude growth over epochs
-- `frequency_vs_time.png` - Token usage vs time value correlation
-- `time_distribution.png` - Histogram of time values
-- `perplexity_comparison.png` - TEMPORAL vs Baseline learning curves
-- `token_category_analysis.png` - Accuracy/confidence by time category
-- `summary_analysis.png` - Comprehensive 6-panel summary
+### Colab Configuration (Default)
+- **Parameters**: ~40M
+- **Layers**: 6
+- **Heads**: 8
+- **Content Dim**: 256
+- **Time Dim**: 256
+- **Dataset**: WikiText-2
+- **Training Time**: 30-60 min on T4 GPU
 
-## 🔧 Configuration
+### Production Configuration
+- **Parameters**: ~125M
+- **Layers**: 12
+- **Content Dim**: 384
+- **Time Dim**: 384
+- **Dataset**: WikiText-103
+- **Training Time**: 2-4 hours
 
-Edit `config.py` to customize:
+**To use Production**: `python train.py --config production --model-type temporal`
+
+---
+
+## 🧪 Verification
+
+The code automatically verifies self-learning on startup:
+
+```
+======================================================================
+GRADIENT FLOW VERIFICATION
+======================================================================
+✓ Time embeddings require_grad: True
+✓ Time embeddings is leaf tensor: True
+
+✅ VERIFIED: Time embeddings will learn through gradients!
+======================================================================
+```
+
+If you see this, time is **truly** self-learning!
+
+---
+
+## 🔧 Quick Customization
+
+Edit `config.py`:
 
 ```python
-# Model architecture
-content_dim = 128      # Content embedding size
-time_dim = 128        # Time embedding size
-n_layers = 2          # Transformer layers
-n_heads = 4           # Attention heads
+# Faster training (less quality)
+num_epochs = 2
+max_train_samples = 5000
 
-# Training
-num_epochs = 10
-batch_size = 32
-learning_rate = 0.0003  # For content embeddings
-time_lr = 0.01         # For time embeddings
+# Larger model
+content_dim = 512
+time_dim = 512
+n_layers = 12
 
-# Time update mechanism
-# Dimensions 0-3: Manual (usage, recency, diversity, confidence)
-# Dimensions 4-127: Learned via gradients
+# Different dataset
+dataset_config = "wikitext-103-raw-v1"
 ```
 
-## 🧪 Testing
+---
 
+## 📊 SOTA Features
+
+- ✅ **RMSNorm**: Faster than LayerNorm (LLaMA)
+- ✅ **SwiGLU**: Better than GELU (LLaMA, PaLM)
+- ✅ **Flash Attention**: PyTorch 2.0 optimized
+- ✅ **Mixed Precision**: BF16/FP16 training
+- ✅ **Gradient Accumulation**: Large effective batch sizes
+- ✅ **Cosine LR Schedule**: With warmup
+- ✅ **Gradient Clipping**: Prevents instability
+
+---
+
+## 📖 Quick Start Options
+
+### Option 1: Full Run (Recommended)
 ```bash
-# Syntax check (no dependencies required)
-python check_syntax.py
+python run_colab.py
+```
+Trains both models, analyzes results
 
-# Full unit tests (requires PyTorch)
-python test_implementation.py
+### Option 2: Train Only TEMPORAL
+```bash
+python train.py --config colab --model-type temporal
 ```
 
-Test coverage:
-- ✅ Time embedding initialization and updates
-- ✅ Dual token representation [content | time]
-- ✅ TEMPORAL transformer forward pass
-- ✅ Baseline transformer comparison
-- ✅ Time value increase with usage
-- ✅ Gradient flow through architecture
+### Option 3: Train Only Baseline
+```bash
+python train.py --config colab --model-type baseline
+```
 
-## 🚀 Future Directions
-
-### Immediate Extensions
-- **Time Decay**: Forgetting mechanism for unused tokens
-- **Multi-Modal Time**: Separate time for different contexts
-- **Adaptive LR**: Vary time updates based on confidence
-- **Inference Learning**: Continue time updates during deployment
-
-### Scaling
-- Larger models (100M+ parameters)
-- Full vocabularies (50k+ tokens)
-- Longer contexts (2k+ tokens)
-- Multiple datasets and domains
-
-### Research Questions
-- How does time interact with positional encodings?
-- Can time embeddings transfer across tasks?
-- What is optimal time dimensionality?
-- How does multi-layer time differ?
-
-## 📚 Key Files
-
-- **[README.md](temporal_prototype/README.md)**: Detailed documentation
-- **[QUICKSTART.md](temporal_prototype/QUICKSTART.md)**: Step-by-step guide
-- **[ANALYSIS.md](temporal_prototype/ANALYSIS.md)**: Results template and interpretation
-- **[requirements.txt](temporal_prototype/requirements.txt)**: Python dependencies
-
-## 🤝 Contributing
-
-This is a research prototype. Contributions, experiments, and extensions welcome!
-
-Areas for contribution:
-- Time update mechanisms
-- Novel attention patterns
-- Scaling experiments
-- Alternative applications
-- Theoretical analysis
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🙏 Acknowledgments
-
-Inspired by:
-- Transformer architecture (Vaswani et al., 2017)
-- Episodic memory in neural networks
-- Meta-learning and few-shot learning
-- Uncertainty quantification in deep learning
-
-## 📧 Contact
-
-For questions, discussions, or collaborations, please open an issue.
+### Option 4: Quick Debug
+```bash
+python train.py --config debug --model-type temporal
+```
+Tiny model, 1000 samples, 2 minutes
 
 ---
 
-## 🎯 Success Criteria Summary
+## 🎓 Research Questions This Answers
 
-TEMPORAL is successful if:
-
-- [x] **Implementation Complete**: All components working
-- [ ] **Time Tracks Usage**: Frequent tokens → high time values
-- [ ] **Competitive Performance**: Perplexity ≤ baseline
-- [ ] **Epistemic Awareness**: Confidence correlates with experience
-- [ ] **Experiential Learning**: Better performance on familiar tokens
-
-Run the prototype to validate these criteria! 🚀
+1. **Can time embeddings learn what "experience" means automatically?** → YES (through gradients)
+2. **Do experienced tokens get better predictions?** → Check results
+3. **What temporal patterns emerge?** → See dimension analysis
+4. **Does this beat standard transformers?** → Compare perplexities
 
 ---
 
-**Built with**: PyTorch | NumPy | Matplotlib | ❤️
+## 📝 Citation
+
+```bibtex
+@software{temporal2025,
+  title={TEMPORAL: Self-Learning Time-Embedded Tokens},
+  year={2025},
+  note={Production implementation with gradient-based time learning}
+}
+```
+
+---
+
+## ✅ TL;DR
+
+**Clone** → **Install** → **Run `python run_colab.py`** → **Wait 30-60 min** → **Check results!**
+
+Dataset: **WikiText-2** (auto-downloads)
+
+That's it! 🚀

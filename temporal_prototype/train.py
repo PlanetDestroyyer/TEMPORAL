@@ -1,409 +1,415 @@
 """
-Training script for TEMPORAL and Baseline transformers.
-Trains both models and logs metrics for comparison.
+Production-Grade Training Script for TEMPORAL
+SOTA datasets, mixed precision, proper logging
 """
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
+from transformers import AutoTokenizer, get_scheduler
+from datasets import load_dataset
 import os
 import json
-import numpy as np
 from tqdm import tqdm
+import numpy as np
 import argparse
 
-from config import Config
-from model import TemporalTransformer, BaselineTransformer, count_parameters
+from config import get_config, print_config
+from model import create_model, verify_gradient_flow
+
+# Optional: Weights & Biases for experiment tracking
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 
-class TextDataset(Dataset):
-    """Simple text dataset for language modeling"""
+# ============================================================================
+# DATA LOADING (SOTA)
+# ============================================================================
 
-    def __init__(self, data, seq_length):
-        self.data = data
-        self.seq_length = seq_length
-
-    def __len__(self):
-        return max(0, len(self.data) - self.seq_length)
-
-    def __getitem__(self, idx):
-        chunk = self.data[idx:idx + self.seq_length + 1]
-        x = torch.tensor(chunk[:-1], dtype=torch.long)
-        y = torch.tensor(chunk[1:], dtype=torch.long)
-        return x, y
-
-
-def load_wikitext_data(config):
+def load_and_prepare_dataset(config):
     """
-    Load and prepare WikiText-2 dataset.
-    For the prototype, we'll create synthetic data if datasets library not available.
+    Load SOTA dataset (WikiText-103, The Pile, C4, etc.)
     """
+    print(f"\nLoading dataset: {config.dataset_name} ({config.dataset_config})")
+
     try:
-        from datasets import load_dataset
+        # Load dataset
+        if config.dataset_name == "wikitext":
+            dataset = load_dataset(config.dataset_name, config.dataset_config)
+        elif config.dataset_name == "pile":
+            dataset = load_dataset("EleutherAI/pile", streaming=True)
+        elif config.dataset_name == "c4":
+            dataset = load_dataset("allenai/c4", "en", streaming=True)
+        else:
+            dataset = load_dataset(config.dataset_name, config.dataset_config)
 
-        # Load WikiText-2
-        dataset = load_dataset(config.dataset_name, config.dataset_config)
+        print(f"✓ Dataset loaded successfully")
 
-        # Build vocabulary from training data
-        train_text = " ".join(dataset['train']['text'])
-        vocab = build_vocab(train_text, config.vocab_size)
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-        # Tokenize datasets
-        train_tokens = tokenize_text(dataset['train']['text'], vocab)
-        val_tokens = tokenize_text(dataset['validation']['text'], vocab)
-        test_tokens = tokenize_text(dataset['test']['text'], vocab)
+        print(f"✓ Tokenizer loaded: {config.tokenizer_name}")
+        print(f"  Vocabulary size: {len(tokenizer)}")
 
-        print(f"Loaded WikiText-2: Train={len(train_tokens)}, Val={len(val_tokens)}, Test={len(test_tokens)}")
-        print(f"Vocabulary size: {len(vocab)}")
+        # Tokenize dataset
+        def tokenize_function(examples):
+            return tokenizer(
+                examples['text'],
+                truncation=True,
+                max_length=config.block_size,
+                padding='max_length',
+                return_tensors='pt'
+            )
 
-        return train_tokens, val_tokens, test_tokens, vocab
+        print("✓ Tokenizing dataset...")
+        tokenized_dataset = dataset.map(
+            tokenize_function,
+            batched=True,
+            remove_columns=dataset['train'].column_names,
+            num_proc=config.preprocessing_num_workers
+        )
+
+        # Apply limits for debugging
+        if config.max_train_samples:
+            tokenized_dataset['train'] = tokenized_dataset['train'].select(
+                range(min(config.max_train_samples, len(tokenized_dataset['train'])))
+            )
+
+        if config.max_eval_samples and 'validation' in tokenized_dataset:
+            tokenized_dataset['validation'] = tokenized_dataset['validation'].select(
+                range(min(config.max_eval_samples, len(tokenized_dataset['validation'])))
+            )
+
+        print(f"✓ Training samples: {len(tokenized_dataset['train']):,}")
+        if 'validation' in tokenized_dataset:
+            print(f"✓ Validation samples: {len(tokenized_dataset['validation']):,}")
+
+        return tokenized_dataset, tokenizer
 
     except Exception as e:
-        print(f"Could not load WikiText-2: {e}")
+        print(f"\n⚠️  Failed to load {config.dataset_name}: {e}")
         print("Generating synthetic data for testing...")
-        return generate_synthetic_data(config)
+        return generate_synthetic_dataset(config)
 
 
-def build_vocab(text, max_vocab_size):
-    """Build vocabulary from text"""
-    # Simple character-level or word-level tokenization
-    words = text.split()
-    word_counts = {}
-    for word in words:
-        word_counts[word] = word_counts.get(word, 0) + 1
+def generate_synthetic_dataset(config):
+    """Fallback: Generate synthetic data if dataset loading fails"""
+    from torch.utils.data import Dataset
 
-    # Sort by frequency and take top max_vocab_size
-    sorted_words = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
-    vocab = {'<PAD>': 0, '<UNK>': 1, '<BOS>': 2, '<EOS>': 3}
+    class SyntheticDataset(Dataset):
+        def __init__(self, num_samples, seq_len, vocab_size):
+            self.num_samples = num_samples
+            self.seq_len = seq_len
+            self.vocab_size = vocab_size
 
-    for word, _ in sorted_words[:max_vocab_size - 4]:
-        vocab[word] = len(vocab)
+        def __len__(self):
+            return self.num_samples
 
-    return vocab
+        def __getitem__(self, idx):
+            input_ids = torch.randint(0, self.vocab_size, (self.seq_len,))
+            return {'input_ids': input_ids, 'labels': input_ids.clone()}
+
+    train_dataset = SyntheticDataset(10000, config.block_size, config.vocab_size)
+    val_dataset = SyntheticDataset(1000, config.block_size, config.vocab_size)
+
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)
+
+    dataset_dict = {
+        'train': train_dataset,
+        'validation': val_dataset
+    }
+
+    print(f"✓ Generated synthetic dataset: {len(train_dataset)} train, {len(val_dataset)} val")
+    return dataset_dict, tokenizer
 
 
-def tokenize_text(text_list, vocab):
-    """Convert text to token IDs"""
-    tokens = []
-    for text in text_list:
-        words = text.split()
-        for word in words:
-            tokens.append(vocab.get(word, vocab['<UNK>']))
-    return tokens
-
-
-def generate_synthetic_data(config):
-    """Generate synthetic data for testing"""
-    print("Generating synthetic data...")
-
-    # Create synthetic sequences
-    np.random.seed(config.seed)
-    train_tokens = np.random.randint(0, config.vocab_size, size=50000).tolist()
-    val_tokens = np.random.randint(0, config.vocab_size, size=5000).tolist()
-    test_tokens = np.random.randint(0, config.vocab_size, size=5000).tolist()
-
-    vocab = {f'token_{i}': i for i in range(config.vocab_size)}
-
-    return train_tokens, val_tokens, test_tokens, vocab
-
+# ============================================================================
+# TRAINING
+# ============================================================================
 
 class Trainer:
-    """Trainer class for both TEMPORAL and Baseline models"""
+    """Production-grade trainer with mixed precision, gradient accumulation, etc."""
 
-    def __init__(self, model, config, train_dataset, val_dataset, model_name="model"):
+    def __init__(self, model, config, train_dataset, eval_dataset, tokenizer):
         self.model = model
         self.config = config
         self.train_dataset = train_dataset
-        self.val_dataset = val_dataset
-        self.model_name = model_name
+        self.eval_dataset = eval_dataset
+        self.tokenizer = tokenizer
 
-        # Setup device
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {self.device}")
+        # Device
+        self.device = torch.device("cuda" if torch.cuda.is_available() and not config.use_cpu else "cpu")
+        print(f"\nUsing device: {self.device}")
+
+        if self.device.type == "cuda":
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+
         self.model.to(self.device)
 
-        # Setup optimizer
-        self.optimizer = optim.AdamW(
+        # DataLoaders
+        self.train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=config.dataloader_num_workers,
+            pin_memory=config.dataloader_pin_memory
+        )
+
+        if eval_dataset:
+            self.eval_dataloader = DataLoader(
+                eval_dataset,
+                batch_size=config.eval_batch_size,
+                num_workers=config.dataloader_num_workers,
+                pin_memory=config.dataloader_pin_memory
+            )
+        else:
+            self.eval_dataloader = None
+
+        # Optimizer (AdamW is SOTA for transformers)
+        self.optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=config.learning_rate,
+            betas=(config.adam_beta1, config.adam_beta2),
+            eps=config.adam_epsilon,
             weight_decay=config.weight_decay
         )
 
-        # Setup learning rate scheduler
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer,
-            T_max=config.num_epochs * len(train_dataset) // config.batch_size
+        # Learning rate scheduler
+        num_training_steps = len(self.train_dataloader) * config.num_epochs // config.gradient_accumulation_steps
+        num_warmup_steps = int(config.warmup_ratio * num_training_steps) if config.warmup_steps is None else config.warmup_steps
+
+        self.lr_scheduler = get_scheduler(
+            config.lr_scheduler_type,
+            optimizer=self.optimizer,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=num_training_steps
         )
 
-        # Loss function
-        self.criterion = nn.CrossEntropyLoss()
+        # Mixed precision
+        self.use_amp = config.bf16 or config.fp16
+        self.scaler = GradScaler() if (config.fp16 and self.device.type == "cuda") else None
 
-        # Logging
-        self.train_losses = []
-        self.val_losses = []
-        self.val_perplexities = []
-        self.time_stats_history = []
-
-        # Create checkpoint directory
-        os.makedirs(config.checkpoint_dir, exist_ok=True)
-        os.makedirs(config.log_dir, exist_ok=True)
-
+        # Tracking
         self.global_step = 0
+        self.best_eval_loss = float('inf')
+
+        # Weights & Biases
+        self.use_wandb = config.use_wandb and WANDB_AVAILABLE
+        if self.use_wandb:
+            wandb.init(
+                project=config.wandb_project,
+                entity=config.wandb_entity,
+                name=config.run_name,
+                config=vars(config)
+            )
+
+        # Create output directories
+        os.makedirs(config.output_dir, exist_ok=True)
+        os.makedirs(config.logging_dir, exist_ok=True)
+        os.makedirs(config.checkpoint_dir, exist_ok=True)
+
+    def train(self):
+        """Main training loop"""
+        print("\n" + "="*70)
+        print("STARTING TRAINING")
+        print("="*70)
+
+        # Verify gradient flow for TEMPORAL model
+        from model_v2 import TemporalTransformer
+        if isinstance(self.model, TemporalTransformer):
+            verify_gradient_flow(self.model)
+
+        for epoch in range(self.config.num_epochs):
+            print(f"\nEpoch {epoch + 1}/{self.config.num_epochs}")
+            train_loss = self.train_epoch(epoch)
+
+            # Evaluation
+            if self.eval_dataloader:
+                eval_loss = self.evaluate()
+                print(f"Epoch {epoch + 1}: Train Loss={train_loss:.4f}, Eval Loss={eval_loss:.4f}, Perplexity={np.exp(eval_loss):.2f}")
+
+                # Save best model
+                if eval_loss < self.best_eval_loss:
+                    self.best_eval_loss = eval_loss
+                    self.save_checkpoint('best')
+            else:
+                print(f"Epoch {epoch + 1}: Train Loss={train_loss:.4f}")
+
+        # Final save
+        self.save_checkpoint('final')
+
+        if self.use_wandb:
+            wandb.finish()
+
+        print("\n✅ Training complete!")
 
     def train_epoch(self, epoch):
         """Train for one epoch"""
         self.model.train()
-        epoch_loss = 0
+        total_loss = 0
         num_batches = 0
 
-        # Create dataloader
-        train_loader = DataLoader(
-            self.train_dataset,
-            batch_size=self.config.batch_size,
-            shuffle=True,
-            drop_last=True
-        )
+        progress_bar = tqdm(self.train_dataloader, desc=f"Training")
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.config.num_epochs}")
+        for batch_idx, batch in enumerate(progress_bar):
+            # Move to device
+            input_ids = batch['input_ids'].to(self.device)
+            labels = input_ids.clone()
 
-        for batch_idx, (x, y) in enumerate(pbar):
-            x, y = x.to(self.device), y.to(self.device)
-
-            # Forward pass
-            self.optimizer.zero_grad()
-
-            if isinstance(self.model, TemporalTransformer):
-                logits = self.model(x, update_time=True)
-            else:
-                logits = self.model(x)
-
-            # Compute loss
-            loss = self.criterion(logits.view(-1, self.config.vocab_size), y.view(-1))
+            # Forward pass with mixed precision
+            with autocast(enabled=self.use_amp, dtype=torch.bfloat16 if self.config.bf16 else torch.float16):
+                outputs = self.model(input_ids, labels=labels, update_time=True)
+                loss = outputs['loss'] / self.config.gradient_accumulation_steps
 
             # Backward pass
-            loss.backward()
+            if self.scaler:
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip)
+            # Gradient accumulation
+            if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
+                # Gradient clipping
+                if self.scaler:
+                    self.scaler.unscale_(self.optimizer)
 
-            self.optimizer.step()
-            self.scheduler.step()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
 
-            # Logging
-            epoch_loss += loss.item()
+                # Optimizer step
+                if self.scaler:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
+
+                self.lr_scheduler.step()
+                self.optimizer.zero_grad()
+
+                self.global_step += 1
+
+                # Logging
+                if self.global_step % self.config.logging_steps == 0:
+                    lr = self.lr_scheduler.get_last_lr()[0]
+                    if self.use_wandb:
+                        wandb.log({
+                            'train/loss': loss.item() * self.config.gradient_accumulation_steps,
+                            'train/lr': lr,
+                            'train/step': self.global_step,
+                            'train/epoch': epoch
+                        })
+
+                # Evaluation
+                if self.config.eval_strategy == "steps" and self.global_step % self.config.eval_steps == 0:
+                    if self.eval_dataloader:
+                        eval_loss = self.evaluate()
+                        print(f"\nStep {self.global_step}: Eval Loss={eval_loss:.4f}, PPL={np.exp(eval_loss):.2f}")
+                        self.model.train()
+
+                # Checkpointing
+                if self.config.save_strategy == "steps" and self.global_step % self.config.save_steps == 0:
+                    self.save_checkpoint(f'step_{self.global_step}')
+
+            total_loss += loss.item() * self.config.gradient_accumulation_steps
             num_batches += 1
-            self.global_step += 1
+            progress_bar.set_postfix({'loss': loss.item() * self.config.gradient_accumulation_steps})
 
-            pbar.set_postfix({'loss': loss.item()})
+        return total_loss / num_batches
 
-            # Periodic logging
-            if self.global_step % self.config.log_interval == 0:
-                self.train_losses.append({
-                    'step': self.global_step,
-                    'loss': loss.item()
-                })
-
-            # Periodic evaluation
-            if self.global_step % self.config.eval_interval == 0:
-                val_loss, val_ppl = self.evaluate()
-                print(f"\nStep {self.global_step}: Val Loss={val_loss:.4f}, Val PPL={val_ppl:.4f}")
-                self.model.train()
-
-            # Save checkpoint
-            if self.global_step % self.config.save_interval == 0:
-                self.save_checkpoint(epoch)
-
-        avg_loss = epoch_loss / num_batches
-        return avg_loss
-
+    @torch.no_grad()
     def evaluate(self):
         """Evaluate on validation set"""
         self.model.eval()
         total_loss = 0
         num_batches = 0
 
-        val_loader = DataLoader(
-            self.val_dataset,
-            batch_size=self.config.batch_size,
-            shuffle=False
-        )
+        for batch in tqdm(self.eval_dataloader, desc="Evaluating"):
+            input_ids = batch['input_ids'].to(self.device)
+            labels = input_ids.clone()
 
-        with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.to(self.device), y.to(self.device)
+            outputs = self.model(input_ids, labels=labels, update_time=False)
+            loss = outputs['loss']
 
-                if isinstance(self.model, TemporalTransformer):
-                    logits = self.model(x, update_time=False)
-                else:
-                    logits = self.model(x)
-
-                loss = self.criterion(logits.view(-1, self.config.vocab_size), y.view(-1))
-                total_loss += loss.item()
-                num_batches += 1
+            total_loss += loss.item()
+            num_batches += 1
 
         avg_loss = total_loss / num_batches
-        perplexity = np.exp(avg_loss)
 
-        self.val_losses.append({'step': self.global_step, 'loss': avg_loss})
-        self.val_perplexities.append({'step': self.global_step, 'perplexity': perplexity})
+        if self.use_wandb:
+            wandb.log({
+                'eval/loss': avg_loss,
+                'eval/perplexity': np.exp(avg_loss),
+                'eval/step': self.global_step
+            })
 
-        return avg_loss, perplexity
+        return avg_loss
 
-    def train(self):
-        """Full training loop"""
-        print(f"\n{'='*60}")
-        print(f"Training {self.model_name}")
-        print(f"Parameters: {count_parameters(self.model):,}")
-        print(f"{'='*60}\n")
-
-        for epoch in range(self.config.num_epochs):
-            # Train epoch
-            train_loss = self.train_epoch(epoch)
-
-            # Evaluate
-            val_loss, val_ppl = self.evaluate()
-
-            print(f"\nEpoch {epoch+1}/{self.config.num_epochs}:")
-            print(f"  Train Loss: {train_loss:.4f}")
-            print(f"  Val Loss: {val_loss:.4f}")
-            print(f"  Val Perplexity: {val_ppl:.4f}")
-
-            # Log time statistics for TEMPORAL model
-            if isinstance(self.model, TemporalTransformer):
-                time_stats = self.model.get_time_statistics()
-                print(f"  Mean Time Magnitude: {time_stats['mean_time_magnitude']:.4f}")
-                print(f"  Max Time Magnitude: {time_stats['max_time_magnitude']:.4f}")
-                self.time_stats_history.append({
-                    'epoch': epoch,
-                    'stats': time_stats
-                })
-
-        # Final evaluation
-        final_val_loss, final_val_ppl = self.evaluate()
-        print(f"\n{'='*60}")
-        print(f"Final Results for {self.model_name}:")
-        print(f"  Val Loss: {final_val_loss:.4f}")
-        print(f"  Val Perplexity: {final_val_ppl:.4f}")
-        print(f"{'='*60}\n")
-
-        # Save final checkpoint
-        self.save_checkpoint('final')
-
-        # Save training logs
-        self.save_logs()
-
-        return final_val_loss, final_val_ppl
-
-    def save_checkpoint(self, epoch):
+    def save_checkpoint(self, name):
         """Save model checkpoint"""
-        checkpoint_path = os.path.join(
-            self.config.checkpoint_dir,
-            f"{self.model_name}_epoch_{epoch}.pt"
-        )
+        checkpoint_path = os.path.join(self.config.checkpoint_dir, f'{name}.pt')
 
         checkpoint = {
-            'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
+            'scheduler_state_dict': self.lr_scheduler.state_dict(),
             'global_step': self.global_step,
-            'config': self.config.__dict__
+            'best_eval_loss': self.best_eval_loss,
+            'config': vars(self.config)
         }
 
         torch.save(checkpoint, checkpoint_path)
-        print(f"Saved checkpoint: {checkpoint_path}")
+        print(f"✓ Checkpoint saved: {checkpoint_path}")
 
-    def save_logs(self):
-        """Save training logs"""
-        log_path = os.path.join(self.config.log_dir, f"{self.model_name}_logs.json")
+        if self.use_wandb:
+            wandb.save(checkpoint_path)
 
-        logs = {
-            'train_losses': self.train_losses,
-            'val_losses': self.val_losses,
-            'val_perplexities': self.val_perplexities,
-            'time_stats_history': self.time_stats_history if isinstance(self.model, TemporalTransformer) else None
-        }
 
-        with open(log_path, 'w') as f:
-            json.dump(logs, f, indent=2, default=lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
-
-        print(f"Saved logs: {log_path}")
-
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Train TEMPORAL and Baseline models")
-    parser.add_argument('--model', type=str, choices=['temporal', 'baseline', 'both'], default='both',
-                        help='Which model to train')
+    parser = argparse.ArgumentParser(description="Train TEMPORAL model")
+    parser.add_argument('--config', type=str, default='colab',
+                        choices=['production', 'colab', 'debug'],
+                        help='Configuration preset')
+    parser.add_argument('--model-type', type=str, default='temporal',
+                        choices=['temporal', 'baseline'],
+                        help='Model type to train')
     args = parser.parse_args()
 
-    # Load configuration
-    config = Config()
+    # Load config
+    config = get_config(args.config)
+    print_config(config)
 
-    # Set random seeds
+    # Set seeds
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(config.seed)
 
-    # Load data
-    train_tokens, val_tokens, test_tokens, vocab = load_wikitext_data(config)
+    # Load dataset
+    dataset_dict, tokenizer = load_and_prepare_dataset(config)
 
-    # Create datasets
-    train_dataset = TextDataset(train_tokens, config.max_seq_length)
-    val_dataset = TextDataset(val_tokens, config.max_seq_length)
+    # Create model
+    model = create_model(config, args.model_type)
 
-    print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Val dataset size: {len(val_dataset)}")
+    # Train
+    trainer = Trainer(
+        model=model,
+        config=config,
+        train_dataset=dataset_dict['train'],
+        eval_dataset=dataset_dict.get('validation'),
+        tokenizer=tokenizer
+    )
 
-    results = {}
-
-    # Train TEMPORAL model
-    if args.model in ['temporal', 'both']:
-        print("\n" + "="*60)
-        print("TRAINING TEMPORAL MODEL")
-        print("="*60)
-
-        temporal_model = TemporalTransformer(config)
-        temporal_trainer = Trainer(temporal_model, config, train_dataset, val_dataset, "temporal")
-        temporal_val_loss, temporal_val_ppl = temporal_trainer.train()
-
-        results['temporal'] = {
-            'val_loss': temporal_val_loss,
-            'val_perplexity': temporal_val_ppl
-        }
-
-    # Train Baseline model
-    if args.model in ['baseline', 'both']:
-        print("\n" + "="*60)
-        print("TRAINING BASELINE MODEL")
-        print("="*60)
-
-        baseline_model = BaselineTransformer(config)
-        baseline_trainer = Trainer(baseline_model, config, train_dataset, val_dataset, "baseline")
-        baseline_val_loss, baseline_val_ppl = baseline_trainer.train()
-
-        results['baseline'] = {
-            'val_loss': baseline_val_loss,
-            'val_perplexity': baseline_val_ppl
-        }
-
-    # Print comparison if both models trained
-    if args.model == 'both':
-        print("\n" + "="*60)
-        print("FINAL COMPARISON")
-        print("="*60)
-        print(f"TEMPORAL - Val Loss: {results['temporal']['val_loss']:.4f}, Val PPL: {results['temporal']['val_perplexity']:.4f}")
-        print(f"BASELINE - Val Loss: {results['baseline']['val_loss']:.4f}, Val PPL: {results['baseline']['val_perplexity']:.4f}")
-
-        if results['temporal']['val_perplexity'] < results['baseline']['val_perplexity']:
-            improvement = ((results['baseline']['val_perplexity'] - results['temporal']['val_perplexity']) /
-                          results['baseline']['val_perplexity'] * 100)
-            print(f"\nTEMPORAL is BETTER by {improvement:.2f}% in perplexity!")
-        else:
-            difference = ((results['temporal']['val_perplexity'] - results['baseline']['val_perplexity']) /
-                         results['baseline']['val_perplexity'] * 100)
-            print(f"\nBASELINE is better by {difference:.2f}% in perplexity")
-
-    print("\nTraining complete!")
+    trainer.train()
 
 
 if __name__ == "__main__":

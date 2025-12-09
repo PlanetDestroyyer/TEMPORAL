@@ -16,7 +16,7 @@ import numpy as np
 import argparse
 
 from config import get_config, print_config
-from model import create_model, verify_gradient_flow
+from model import create_model, verify_gradient_flow, TemporalTransformer
 
 # Optional: Weights & Biases for experiment tracking
 try:
@@ -240,7 +240,6 @@ class Trainer:
         print("="*70)
 
         # Verify gradient flow for TEMPORAL model
-        from model import TemporalTransformer
         if isinstance(self.model, TemporalTransformer):
             verify_gradient_flow(self.model)
 

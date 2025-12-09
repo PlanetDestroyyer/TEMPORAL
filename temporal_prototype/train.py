@@ -283,7 +283,11 @@ class Trainer:
 
             # Forward pass with mixed precision
             with autocast(enabled=self.use_amp, dtype=torch.bfloat16 if self.config.bf16 else torch.float16):
-                outputs = self.model(input_ids, labels=labels, update_time=True)
+                # Only pass update_time to TEMPORAL models (Baseline doesn't support it)
+                if isinstance(self.model, TemporalTransformer):
+                    outputs = self.model(input_ids, labels=labels, update_time=True)
+                else:
+                    outputs = self.model(input_ids, labels=labels)
                 loss = outputs['loss'] / self.config.gradient_accumulation_steps
 
             # Backward pass
@@ -351,7 +355,11 @@ class Trainer:
             input_ids = batch['input_ids'].to(self.device)
             labels = input_ids.clone()
 
-            outputs = self.model(input_ids, labels=labels, update_time=False)
+            # Only pass update_time to TEMPORAL models (Baseline doesn't support it)
+            if isinstance(self.model, TemporalTransformer):
+                outputs = self.model(input_ids, labels=labels, update_time=False)
+            else:
+                outputs = self.model(input_ids, labels=labels)
             loss = outputs['loss']
 
             total_loss += loss.item()

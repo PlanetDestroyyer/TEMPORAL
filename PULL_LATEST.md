@@ -1,6 +1,6 @@
 # 🔄 PULL LATEST FIXES
 
-The DataLoader fix was just pushed. You need fresh code!
+All critical fixes applied! You need fresh code.
 
 ## In Colab/Kaggle, Run This:
 
@@ -21,27 +21,26 @@ The DataLoader fix was just pushed. You need fresh code!
 
 ## What Was Fixed:
 
-1. ✅ DataLoader collation error (the one you're seeing)
+1. ✅ DataLoader collation error
 2. ✅ Custom collate_fn handles tensor batching properly
 3. ✅ Worker count reduced to 2
 4. ✅ Import errors fixed
+5. ✅ **NEW: Baseline model training error fixed**
+6. ✅ W&B disabled by default (no interactive prompts)
 
-## The Fix Applied:
+## Latest Fix (Baseline Training):
 
-Added custom collate function in train.py line 156-166:
+**Problem**: Baseline model training crashed with `update_time` parameter error
+
+**Solution**: Added conditional check in train.py (lines 287-290, 359-362):
 ```python
-def collate_fn(batch):
-    """Collate function for DataLoader"""
-    if isinstance(batch[0], dict):
-        # Stack all tensors in the batch
-        return {
-            key: torch.stack([torch.tensor(item[key]) if not isinstance(item[key], torch.Tensor) else item[key] for item in batch])
-            for key in batch[0].keys()
-        }
-    else:
-        return torch.utils.data.dataloader.default_collate(batch)
+# Only pass update_time to TEMPORAL models
+if isinstance(self.model, TemporalTransformer):
+    outputs = self.model(input_ids, labels=labels, update_time=True)
+else:
+    outputs = self.model(input_ids, labels=labels)
 ```
 
-This properly converts the dataset items to tensors and batches them.
+Now both TEMPORAL and Baseline models train correctly!
 
 **Just delete old code and re-clone!** 🚀

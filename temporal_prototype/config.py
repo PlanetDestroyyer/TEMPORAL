@@ -172,12 +172,17 @@ class ColabConfig(ProductionConfig):
     batch_size = 4
     gradient_accumulation_steps = 8
     max_seq_length = 512
+    block_size = 512  # Match max_seq_length for consistency
 
     # Fewer epochs (faster experimentation)
     num_epochs = 2
 
     # Dataset
     dataset_config = "wikitext-2-raw-v1"  # Smaller dataset
+
+    # Performance (reduce workers for Colab/Kaggle)
+    dataloader_num_workers = 2
+    preprocessing_num_workers = 2
 
     # Model size: ~40M parameters
 

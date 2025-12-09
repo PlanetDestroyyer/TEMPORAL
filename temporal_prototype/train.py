@@ -153,13 +153,26 @@ class Trainer:
 
         self.model.to(self.device)
 
+        # Custom collate function to handle tokenized data
+        def collate_fn(batch):
+            """Collate function for DataLoader"""
+            if isinstance(batch[0], dict):
+                # Stack all tensors in the batch
+                return {
+                    key: torch.stack([torch.tensor(item[key]) if not isinstance(item[key], torch.Tensor) else item[key] for item in batch])
+                    for key in batch[0].keys()
+                }
+            else:
+                return torch.utils.data.dataloader.default_collate(batch)
+
         # DataLoaders
         self.train_dataloader = DataLoader(
             train_dataset,
             batch_size=config.batch_size,
             shuffle=True,
             num_workers=config.dataloader_num_workers,
-            pin_memory=config.dataloader_pin_memory
+            pin_memory=config.dataloader_pin_memory,
+            collate_fn=collate_fn
         )
 
         if eval_dataset:
@@ -167,7 +180,8 @@ class Trainer:
                 eval_dataset,
                 batch_size=config.eval_batch_size,
                 num_workers=config.dataloader_num_workers,
-                pin_memory=config.dataloader_pin_memory
+                pin_memory=config.dataloader_pin_memory,
+                collate_fn=collate_fn
             )
         else:
             self.eval_dataloader = None
@@ -226,7 +240,7 @@ class Trainer:
         print("="*70)
 
         # Verify gradient flow for TEMPORAL model
-        from model_v2 import TemporalTransformer
+        from model import TemporalTransformer
         if isinstance(self.model, TemporalTransformer):
             verify_gradient_flow(self.model)
 

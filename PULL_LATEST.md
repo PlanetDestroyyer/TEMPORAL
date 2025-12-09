@@ -26,11 +26,12 @@ All critical fixes applied! You need fresh code.
 3. ✅ Worker count reduced to 2
 4. ✅ Import errors fixed
 5. ✅ **NEW: Baseline model training error fixed**
-6. ✅ W&B disabled by default (no interactive prompts)
+6. ✅ **NEW: TemporalTransformer import added to train.py**
+7. ✅ W&B disabled by default (no interactive prompts)
 
-## Latest Fix (Baseline Training):
+## Latest Fixes (Baseline Training):
 
-**Problem**: Baseline model training crashed with `update_time` parameter error
+**Problem 1**: Baseline model training crashed with `update_time` parameter error
 
 **Solution**: Added conditional check in train.py (lines 287-290, 359-362):
 ```python
@@ -39,6 +40,13 @@ if isinstance(self.model, TemporalTransformer):
     outputs = self.model(input_ids, labels=labels, update_time=True)
 else:
     outputs = self.model(input_ids, labels=labels)
+```
+
+**Problem 2**: NameError - `TemporalTransformer` not defined in isinstance check
+
+**Solution**: Added import at top of train.py (line 19):
+```python
+from model import create_model, verify_gradient_flow, TemporalTransformer
 ```
 
 Now both TEMPORAL and Baseline models train correctly!

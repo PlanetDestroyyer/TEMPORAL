@@ -45,9 +45,21 @@ def load_and_prepare_dataset(config):
         elif config.dataset_name == "c4":
             dataset = load_dataset("allenai/c4", "en", streaming=True)
         else:
-            dataset = load_dataset(config.dataset_name, config.dataset_config)
+            # Custom dataset from HuggingFace
+            if config.dataset_config:
+                dataset = load_dataset(config.dataset_name, config.dataset_config)
+            else:
+                dataset = load_dataset(config.dataset_name)
 
         print(f"✓ Dataset loaded successfully")
+
+        # Check if dataset has validation split, if not create one
+        if 'validation' not in dataset:
+            print("⚠️  No validation split found, creating from train data (90/10 split)...")
+            train_val_split = dataset['train'].train_test_split(test_size=0.1, seed=42)
+            dataset['train'] = train_val_split['train']
+            dataset['validation'] = train_val_split['test']
+            print(f"✓ Created validation split: train={len(dataset['train']):,}, val={len(dataset['validation']):,}")
 
         # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name)

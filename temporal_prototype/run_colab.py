@@ -114,7 +114,7 @@ def main():
 
     # Estimate time based on config
     if config_name == 'scaled':
-        log_and_print("\nEstimated time: 3-5 hours on P100 GPU, 6-8 hours on T4 GPU\n")
+        log_and_print("\nEstimated time: 3-5 hours on P100 GPU, 5-8 hours on T4 GPU\n")
     elif config_name == 'debug':
         log_and_print("\nEstimated time: 2-5 minutes\n")
     else:

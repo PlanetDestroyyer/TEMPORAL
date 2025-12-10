@@ -240,8 +240,12 @@ class Trainer:
         print("="*70)
 
         # Verify gradient flow for TEMPORAL model
-        if isinstance(self.model, TemporalTransformer):
+        is_temporal = isinstance(self.model, TemporalTransformer)
+        if is_temporal:
             verify_gradient_flow(self.model)
+
+        # Store epoch results for logging
+        epoch_results = []
 
         for epoch in range(self.config.num_epochs):
             print(f"\nEpoch {epoch + 1}/{self.config.num_epochs}")
@@ -250,7 +254,16 @@ class Trainer:
             # Evaluation
             if self.eval_dataloader:
                 eval_loss = self.evaluate()
-                print(f"Epoch {epoch + 1}: Train Loss={train_loss:.4f}, Eval Loss={eval_loss:.4f}, Perplexity={np.exp(eval_loss):.2f}")
+                perplexity = np.exp(eval_loss)
+                print(f"Epoch {epoch + 1}: Train Loss={train_loss:.4f}, Eval Loss={eval_loss:.4f}, Perplexity={perplexity:.2f}")
+
+                # Store results
+                epoch_results.append({
+                    'epoch': epoch + 1,
+                    'train_loss': train_loss,
+                    'eval_loss': eval_loss,
+                    'perplexity': perplexity
+                })
 
                 # Save best model
                 if eval_loss < self.best_eval_loss:
@@ -258,9 +271,38 @@ class Trainer:
                     self.save_checkpoint('best')
             else:
                 print(f"Epoch {epoch + 1}: Train Loss={train_loss:.4f}")
+                epoch_results.append({
+                    'epoch': epoch + 1,
+                    'train_loss': train_loss
+                })
 
         # Final save
         self.save_checkpoint('final')
+
+        # Log final results to output.txt
+        model_type = "TEMPORAL" if is_temporal else "BASELINE"
+        with open("output.txt", 'a') as f:
+            f.write(f"\n{'='*70}\n")
+            f.write(f"{model_type} MODEL TRAINING RESULTS (Seed: {self.config.seed})\n")
+            f.write(f"{'='*70}\n\n")
+
+            for result in epoch_results:
+                f.write(f"Epoch {result['epoch']}: ")
+                f.write(f"Train Loss={result['train_loss']:.4f}")
+                if 'eval_loss' in result:
+                    f.write(f", Eval Loss={result['eval_loss']:.4f}")
+                    f.write(f", Perplexity={result['perplexity']:.2f}")
+                f.write("\n")
+
+            # Write final summary
+            if epoch_results:
+                final = epoch_results[-1]
+                f.write(f"\nFinal Results:\n")
+                f.write(f"  Train Loss: {final['train_loss']:.4f}\n")
+                if 'eval_loss' in final:
+                    f.write(f"  Eval Loss: {final['eval_loss']:.4f}\n")
+                    f.write(f"  Perplexity: {final['perplexity']:.2f}\n")
+            f.write("\n")
 
         if self.use_wandb:
             wandb.finish()
@@ -407,17 +449,30 @@ def main():
     parser.add_argument('--model-type', type=str, default='temporal',
                         choices=['temporal', 'baseline'],
                         help='Model type to train')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Random seed (overrides config seed)')
     args = parser.parse_args()
 
     # Load config
     config = get_config(args.config)
-    print_config(config)
 
-    # Set seeds
+    # Override seed if provided
+    if args.seed is not None:
+        config.seed = args.seed
+
+    print_config(config)
+    print(f"\n🎲 Using random seed: {config.seed}\n")
+
+    # Set seeds for reproducibility
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(config.seed)
+
+    # Make cudnn deterministic (may be slower)
+    if config.deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     # Load dataset
     dataset_dict, tokenizer = load_and_prepare_dataset(config)

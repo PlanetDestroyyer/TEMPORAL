@@ -193,10 +193,10 @@ class ScaledConfig(ProductionConfig):
     This config is designed to show stronger TEMPORAL advantages:
     - Larger model (more capacity to learn time patterns)
     - More training (time embeddings need experience to learn)
-    - Bigger dataset (more diverse temporal patterns)
+    - SAME dataset as colab (WikiText-2) but more epochs
 
     Suitable for: Kaggle P100, Colab Pro, or any GPU with 16GB+ VRAM
-    Training time: ~3-5 hours on P100, ~6-8 hours on T4
+    Training time: ~2-4 hours on P100, ~4-6 hours on T4
     """
 
     # Larger model architecture
@@ -214,14 +214,14 @@ class ScaledConfig(ProductionConfig):
     block_size = 1024
 
     # MORE TRAINING - Critical for time embeddings to learn!
-    num_epochs = 10         # 5x vs Colab
+    num_epochs = 5          # 2.5x vs Colab (good balance)
 
-    # Larger dataset - More diverse patterns
-    dataset_config = "wikitext-103-raw-v1"  # 100x larger than wikitext-2
+    # SAME dataset as colab - WikiText-2 (fast but more epochs)
+    dataset_config = "wikitext-2-raw-v1"  # Same as colab, just more epochs
 
     # Evaluation
-    eval_steps = 1000       # Less frequent (larger dataset)
-    save_steps = 2000
+    eval_steps = 500        # Same frequency as colab
+    save_steps = 1000
 
     # Performance
     dataloader_num_workers = 2

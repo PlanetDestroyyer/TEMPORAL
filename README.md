@@ -163,11 +163,11 @@ python run_colab.py --config scaled --seed 42
 **Scaled Config:**
 - **12 layers** (2x current)
 - **384-dim embeddings** (+50% capacity)
-- **10 epochs** (5x current)
-- **WikiText-103** dataset (100x larger!)
+- **5 epochs** (2.5x current)
+- **WikiText-2** dataset (same as colab, but more epochs & larger model)
 - **~355M parameters** (GPT-2 small scale)
 - **Expected**: 1-3% improvement (vs 0.8%)
-- **Time**: 3-5 hours on P100, 6-8 hours on T4
+- **Time**: 2-4 hours on P100, 4-6 hours on T4
 
 ---
 

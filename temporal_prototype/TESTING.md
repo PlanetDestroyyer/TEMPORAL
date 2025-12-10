@@ -144,7 +144,12 @@ Validate TEMPORAL's unique capability: improving on repeated text.
 ### How to Run
 
 ```bash
+# Default (colab config)
 python test_inference_learning.py
+
+# Or specify config explicitly (must match training!)
+python test_inference_learning.py --config colab
+python test_inference_learning.py --config scaled
 ```
 
 ### What It Does
@@ -197,7 +202,12 @@ Understand what the time embeddings learned.
 ### How to Run
 
 ```bash
+# Default (colab config)
 python test_time_patterns.py
+
+# Or specify config explicitly (must match training!)
+python test_time_patterns.py --config colab
+python test_time_patterns.py --config scaled
 ```
 
 ### What It Does

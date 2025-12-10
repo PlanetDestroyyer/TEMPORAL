@@ -8,11 +8,15 @@ The hypothesis: When the same text is shown multiple times with update_time=True
 the model should get better at predicting it (lower perplexity).
 
 Usage:
-  python test_inference_learning.py
+  python test_inference_learning.py --config colab
+  python test_inference_learning.py --config scaled
+
+Note: The --config argument must match the config used during training!
 """
 
 import torch
 import numpy as np
+import argparse
 from transformers import AutoTokenizer
 from model import TemporalTransformer
 from config import get_config
@@ -28,7 +32,7 @@ def compute_perplexity(model, input_ids, update_time=False):
     return perplexity
 
 
-def test_inference_learning():
+def test_inference_learning(config_name='colab'):
     """Test if model improves on repeated text"""
     print("\n" + "="*80)
     print("TEST: INFERENCE-TIME LEARNING")
@@ -37,22 +41,57 @@ def test_inference_learning():
     print("Does the model get better at predicting text after seeing it multiple times?\n")
 
     # Load model
-    config = get_config('colab')
+    config = get_config(config_name)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    print(f"Loading TEMPORAL model...")
-    model = TemporalTransformer(config).to(device)
+    print(f"Loading TEMPORAL model (config: {config_name})...")
 
-    # Load checkpoint
-    checkpoint_path = 'checkpoints/temporal_production/final.pt'
+    # Determine checkpoint path based on config
+    checkpoint_path = f'checkpoints/temporal_production/final.pt'
+
+    # Try to load checkpoint - first attempt with saved config
     try:
         checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        # Check if checkpoint has config saved
+        if 'config' in checkpoint:
+            saved_config_dict = checkpoint['config']
+            print(f"✓ Found saved config in checkpoint")
+
+            # Recreate config from saved dict
+            config_obj = get_config(config_name)
+            for key, value in saved_config_dict.items():
+                if hasattr(config_obj, key):
+                    setattr(config_obj, key, value)
+            config = config_obj
+
+        # Create model with correct config
+        model = TemporalTransformer(config).to(device)
         model.load_state_dict(checkpoint['model_state_dict'])
         print(f"✓ Loaded checkpoint from {checkpoint_path}\n")
-    except Exception as e:
-        print(f"❌ Failed to load checkpoint: {e}")
+
+    except FileNotFoundError:
+        print(f"❌ Checkpoint not found: {checkpoint_path}")
         print("Make sure to train the model first with: python run_colab.py\n")
         return
+    except Exception as e:
+        print(f"❌ Failed to load checkpoint: {e}")
+        print(f"\nTrying to create model with {config_name} config and load checkpoint...")
+
+        try:
+            # Create model with specified config
+            model = TemporalTransformer(config).to(device)
+
+            # Try to load with strict=False to see what matches
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            print(f"⚠️  Loaded checkpoint with strict=False - some weights may not match")
+            print(f"This may happen if checkpoint was saved with different config\n")
+        except Exception as e2:
+            print(f"❌ Complete failure to load checkpoint: {e2}")
+            print("\nTip: Make sure checkpoint config matches test config")
+            print(f"Current test config: {config_name}")
+            print(f"Try running with: python test_inference_learning.py --config production\n")
+            return
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained('gpt2')
@@ -138,4 +177,10 @@ def test_inference_learning():
 
 
 if __name__ == "__main__":
-    test_inference_learning()
+    parser = argparse.ArgumentParser(description="Test inference-time learning")
+    parser.add_argument('--config', type=str, default='colab',
+                        choices=['production', 'colab', 'scaled', 'debug'],
+                        help='Configuration to use (must match training config)')
+    args = parser.parse_args()
+
+    test_inference_learning(args.config)

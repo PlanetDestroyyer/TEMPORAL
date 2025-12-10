@@ -444,8 +444,8 @@ class Trainer:
 def main():
     parser = argparse.ArgumentParser(description="Train TEMPORAL model")
     parser.add_argument('--config', type=str, default='colab',
-                        choices=['production', 'colab', 'debug'],
-                        help='Configuration preset')
+                        choices=['production', 'colab', 'scaled', 'debug'],
+                        help='Configuration preset (colab: fast validation, scaled: comprehensive)')
     parser.add_argument('--model-type', type=str, default='temporal',
                         choices=['temporal', 'baseline'],
                         help='Model type to train')

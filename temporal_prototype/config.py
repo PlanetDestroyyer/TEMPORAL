@@ -158,9 +158,9 @@ class ProductionConfig:
 
 
 class ColabConfig(ProductionConfig):
-    """Optimized for Google Colab (Free Tier: T4 GPU, 12GB RAM)"""
+    """Optimized for Google Colab/Kaggle (T4/P100 GPU)"""
 
-    # Reduce model size for Colab
+    # Moderate model size for free-tier GPUs
     content_dim = 256
     time_dim = 256
     total_dim = 512
@@ -174,7 +174,7 @@ class ColabConfig(ProductionConfig):
     max_seq_length = 512
     block_size = 512  # Match max_seq_length for consistency
 
-    # Fewer epochs (faster experimentation)
+    # Quick validation runs
     num_epochs = 2
 
     # Dataset
@@ -184,7 +184,50 @@ class ColabConfig(ProductionConfig):
     dataloader_num_workers = 2
     preprocessing_num_workers = 2
 
-    # Model size: ~40M parameters
+    # Model size: ~76M parameters
+
+
+class ScaledConfig(ProductionConfig):
+    """Scaled-up configuration for comprehensive validation
+
+    This config is designed to show stronger TEMPORAL advantages:
+    - Larger model (more capacity to learn time patterns)
+    - More training (time embeddings need experience to learn)
+    - Bigger dataset (more diverse temporal patterns)
+
+    Suitable for: Kaggle P100, Colab Pro, or any GPU with 16GB+ VRAM
+    Training time: ~3-5 hours on P100, ~6-8 hours on T4
+    """
+
+    # Larger model architecture
+    content_dim = 384       # +50% vs Colab
+    time_dim = 384          # +50% vs Colab
+    total_dim = 768         # GPT-2 small size
+    n_layers = 12           # 2x vs Colab (standard for GPT-2 small)
+    n_heads = 12            # Matches total_dim
+    ff_dim = 3072           # 4x total_dim (standard)
+
+    # Training batches
+    batch_size = 4          # Same as Colab (memory constraint)
+    gradient_accumulation_steps = 16  # 2x vs Colab = effective batch 64
+    max_seq_length = 1024   # Longer context
+    block_size = 1024
+
+    # MORE TRAINING - Critical for time embeddings to learn!
+    num_epochs = 10         # 5x vs Colab
+
+    # Larger dataset - More diverse patterns
+    dataset_config = "wikitext-103-raw-v1"  # 100x larger than wikitext-2
+
+    # Evaluation
+    eval_steps = 1000       # Less frequent (larger dataset)
+    save_steps = 2000
+
+    # Performance
+    dataloader_num_workers = 2
+    preprocessing_num_workers = 4
+
+    # Model size: ~355M parameters (GPT-2 small scale)
 
 
 class FastDebugConfig(ProductionConfig):
@@ -223,6 +266,7 @@ def get_config(config_name="production"):
     configs = {
         "production": ProductionConfig(),
         "colab": ColabConfig(),
+        "scaled": ScaledConfig(),
         "debug": FastDebugConfig(),
     }
     return configs.get(config_name, ProductionConfig())

@@ -45,11 +45,11 @@ After running multiple seeds:
 # Statistical comparison across all runs
 !python test_comparison.py
 
-# Test inference-time learning
-!python test_inference_learning.py
+# Test inference-time learning (config must match training!)
+!python test_inference_learning.py --config colab
 
-# Analyze time embedding patterns
-!python test_time_patterns.py
+# Analyze time embedding patterns (config must match training!)
+!python test_time_patterns.py --config colab
 ```
 
 ---
@@ -169,11 +169,11 @@ python run_colab.py --seed 42
 # Compare all runs
 python test_comparison.py
 
-# Test inference-time learning
-python test_inference_learning.py
+# Test inference-time learning (config must match training!)
+python test_inference_learning.py --config colab
 
-# Analyze time embeddings
-python test_time_patterns.py
+# Analyze time embeddings (config must match training!)
+python test_time_patterns.py --config colab
 
 # Check output file
 !cat output.txt | tail -100

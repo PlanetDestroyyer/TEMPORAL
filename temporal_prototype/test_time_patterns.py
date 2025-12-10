@@ -7,11 +7,15 @@ This test examines what the time embeddings have learned:
 - How do time embeddings cluster?
 
 Usage:
-  python test_time_patterns.py
+  python test_time_patterns.py --config colab
+  python test_time_patterns.py --config scaled
+
+Note: The --config argument must match the config used during training!
 """
 
 import torch
 import numpy as np
+import argparse
 from transformers import AutoTokenizer
 from model import TemporalTransformer
 from config import get_config
@@ -19,7 +23,7 @@ import matplotlib.pyplot as plt
 from collections import Counter
 
 
-def analyze_time_embeddings():
+def analyze_time_embeddings(config_name='colab'):
     """Analyze learned time embedding patterns"""
     print("\n" + "="*80)
     print("TIME EMBEDDING ANALYSIS")
@@ -27,22 +31,57 @@ def analyze_time_embeddings():
     print("\nAnalyzing what patterns the time embeddings discovered...\n")
 
     # Load model
-    config = get_config('colab')
+    config = get_config(config_name)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    print(f"Loading TEMPORAL model...")
-    model = TemporalTransformer(config).to(device)
+    print(f"Loading TEMPORAL model (config: {config_name})...")
 
-    # Load checkpoint
+    # Determine checkpoint path
     checkpoint_path = 'checkpoints/temporal_production/final.pt'
+
+    # Try to load checkpoint with saved config
     try:
         checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        # Check if checkpoint has config saved
+        if 'config' in checkpoint:
+            saved_config_dict = checkpoint['config']
+            print(f"✓ Found saved config in checkpoint")
+
+            # Recreate config from saved dict
+            config_obj = get_config(config_name)
+            for key, value in saved_config_dict.items():
+                if hasattr(config_obj, key):
+                    setattr(config_obj, key, value)
+            config = config_obj
+
+        # Create model with correct config
+        model = TemporalTransformer(config).to(device)
         model.load_state_dict(checkpoint['model_state_dict'])
         print(f"✓ Loaded checkpoint from {checkpoint_path}\n")
-    except Exception as e:
-        print(f"❌ Failed to load checkpoint: {e}")
+
+    except FileNotFoundError:
+        print(f"❌ Checkpoint not found: {checkpoint_path}")
         print("Make sure to train the model first with: python run_colab.py\n")
         return
+    except Exception as e:
+        print(f"❌ Failed to load checkpoint: {e}")
+        print(f"\nTrying to create model with {config_name} config and load checkpoint...")
+
+        try:
+            # Create model with specified config
+            model = TemporalTransformer(config).to(device)
+
+            # Try to load with strict=False
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            print(f"⚠️  Loaded checkpoint with strict=False - some weights may not match")
+            print(f"This may happen if checkpoint was saved with different config\n")
+        except Exception as e2:
+            print(f"❌ Complete failure to load checkpoint: {e2}")
+            print("\nTip: Make sure checkpoint config matches test config")
+            print(f"Current test config: {config_name}")
+            print(f"Try running with: python test_time_patterns.py --config production\n")
+            return
 
     # Get time embeddings
     time_emb = model.tokenizer.time_embeddings.time_embeddings.detach().cpu().numpy()
@@ -216,8 +255,14 @@ def analyze_time_embeddings():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Analyze time embedding patterns")
+    parser.add_argument('--config', type=str, default='colab',
+                        choices=['production', 'colab', 'scaled', 'debug'],
+                        help='Configuration to use (must match training config)')
+    args = parser.parse_args()
+
     try:
-        analyze_time_embeddings()
+        analyze_time_embeddings(args.config)
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback

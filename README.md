@@ -163,11 +163,12 @@ python run_colab.py --config scaled --seed 42
 **Scaled Config:**
 - **12 layers** (2x current)
 - **384-dim embeddings** (+50% capacity)
-- **10 epochs** (5x current)
-- **Filtered WikiText-103** dataset (sentences 10-30 tokens, from HuggingFace)
+- **3 epochs** (1.5x current)
+- **Filtered WikiText-103** dataset (limited to 100k samples, 3x WikiText-2)
 - **~355M parameters** (GPT-2 small scale)
+- **Training volume**: 300k sample-epochs (4x colab's 72k)
 - **Expected**: 1-3% improvement (vs 0.8%)
-- **Time**: 3-5 hours on P100, 5-8 hours on T4
+- **Time**: 4-6 hours on P100, 6-10 hours on T4
 
 ---
 

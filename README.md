@@ -153,23 +153,37 @@ python run_colab.py --seed 777   # Run 3
 python test_comparison.py        # Statistical analysis
 ```
 
-### 🚀 Next: Scaled-Up Validation
+### 🚀 Next: Scaled-Up Architecture Validation
 
-For stronger results, use the **scaled configuration**:
+**Quick Validation (TEMPORAL Only, No Baseline)**
+
+For fast architecture validation on Kaggle P100 (16GB VRAM):
 ```bash
-python run_colab.py --config scaled --seed 42
+# Train TEMPORAL only (skip baseline comparison)
+python train_temporal_only.py --config scaled --seed 42
+
+# Validate the model works (next token prediction)
+python validate_model.py --config scaled
 ```
 
 **Scaled Config:**
 - **12 layers** (2x current)
 - **384-dim embeddings** (+50% capacity)
-- **3 epochs** (1.5x current)
-- **Filtered WikiText-103** dataset (limited to 100k samples, 3x WikiText-2)
+- **10 epochs** on WikiText-2 (5x current)
 - **~355M parameters** (GPT-2 small scale)
-- **Optimized**: 512 seq len, batch 8, grad accum 4 (4x faster!)
-- **Training volume**: 300k sample-epochs (4x colab's 72k)
-- **Expected**: 1-3% improvement (vs 0.8%)
-- **Time**: 3-5 hours on P100, 5-8 hours on T4
+- **Optimized**: 512 seq len, batch 8, grad accum 4 (fast!)
+- **Training volume**: 360k sample-epochs (5x colab's 72k)
+- **Time**: ~1.5-2 hours on P100 (TEMPORAL only, no baseline)
+- **Purpose**: Validate scaled architecture works, no comparison needed
+
+**Full Comparison (TEMPORAL + Baseline)**
+
+For complete validation with baseline comparison:
+```bash
+python run_colab.py --config scaled --seed 42
+```
+- **Time**: ~3-4 hours (trains both models)
+- **Purpose**: Full performance comparison
 
 ---
 

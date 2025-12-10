@@ -188,15 +188,16 @@ class ColabConfig(ProductionConfig):
 
 
 class ScaledConfig(ProductionConfig):
-    """Scaled-up configuration for comprehensive validation
+    """Scaled-up configuration for architecture validation
 
-    This config is designed to show stronger TEMPORAL advantages:
-    - Larger model (more capacity to learn time patterns)
-    - More training (time embeddings need experience to learn)
-    - Optimized for speed: shorter sequences, less accumulation
+    This config validates TEMPORAL architecture at scale:
+    - Larger model (12 layers, 384-dim)
+    - More epochs on WikiText-2 (10 epochs for deep training)
+    - Optimized for 16GB VRAM (Kaggle P100)
+    - TEMPORAL ONLY (skip baseline to save time)
 
-    Suitable for: Kaggle P100, Colab Pro, or any GPU with 16GB+ VRAM
-    Training time: ~3-5 hours on P100, ~5-8 hours on T4
+    Suitable for: Kaggle P100, Colab Pro, or any GPU with 16GB VRAM
+    Training time: ~1.5-2 hours on P100 (TEMPORAL only, no baseline)
     """
 
     # Larger model architecture
@@ -207,37 +208,36 @@ class ScaledConfig(ProductionConfig):
     n_heads = 12            # Matches total_dim
     ff_dim = 3072           # 4x total_dim (standard)
 
-    # Training batches - OPTIMIZED FOR SPEED
-    batch_size = 8          # 2x colab (more throughput)
-    gradient_accumulation_steps = 4  # Reduced for speed (effective batch 32)
-    max_seq_length = 512    # Shorter sequences = 2x faster
+    # Training batches - OPTIMIZED FOR 16GB VRAM
+    batch_size = 8          # Good for P100
+    gradient_accumulation_steps = 4  # Effective batch 32
+    max_seq_length = 512    # Balanced: speed vs context
     block_size = 512        # Match max_seq_length
 
-    # MORE TRAINING - Critical for time embeddings to learn!
-    num_epochs = 3          # 1.5x vs Colab (balanced for time)
+    # MORE EPOCHS - Small dataset, deep training
+    num_epochs = 10         # 5x vs colab (WikiText-2 is small, so train longer)
 
-    # Filtered WikiText-103 dataset (sentences with 10-30 tokens)
-    # LIMITED to 100k samples for reasonable training time
-    dataset_name = "carlosejimenez/wikitext-103-raw-v1_sents_min_len10_max_len30"
-    dataset_config = None  # Custom dataset doesn't need config
+    # WikiText-2 dataset (small, fast, well-tested)
+    dataset_name = "wikitext"
+    dataset_config = "wikitext-2-raw-v1"
 
-    # LIMIT dataset size for reasonable training time
-    # 100k samples * 3 epochs = 300k sample-epochs (4x colab's 72k)
-    max_train_samples = 100_000  # 3x WikiText-2, reasonable training time
-    max_eval_samples = 10_000    # 10% for validation
+    # No sample limits - use full WikiText-2 (~36k samples)
+    max_train_samples = None
+    max_eval_samples = None
 
     # Evaluation
-    eval_steps = 500        # Adjust based on dataset size
-    save_steps = 1000
+    eval_steps = 200        # More frequent (small dataset)
+    save_steps = 500
 
     # Performance
     dataloader_num_workers = 2
     preprocessing_num_workers = 4
 
     # Model size: ~355M parameters (GPT-2 small scale)
-    # Optimizations: 512 seq len (2x faster), batch 8, grad accum 4
-    # Expected speed: ~4-5 it/s (4x faster than 1024 seq len)
-    # Training time estimate: ~3-5 hours on P100
+    # Dataset: WikiText-2 full (~36k samples)
+    # Training: 10 epochs = 360k sample-epochs (5x colab's 72k)
+    # Expected speed: ~4-5 it/s
+    # Training time: ~1.5-2 hours on P100 (TEMPORAL only, no baseline)
 
 
 class FastDebugConfig(ProductionConfig):

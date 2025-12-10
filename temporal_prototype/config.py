@@ -193,10 +193,10 @@ class ScaledConfig(ProductionConfig):
     This config is designed to show stronger TEMPORAL advantages:
     - Larger model (more capacity to learn time patterns)
     - More training (time embeddings need experience to learn)
-    - Filtered WikiText-103 dataset (sentences 10-30 tokens)
+    - Limited dataset size for reasonable training time
 
     Suitable for: Kaggle P100, Colab Pro, or any GPU with 16GB+ VRAM
-    Training time: ~3-5 hours on P100, ~5-8 hours on T4
+    Training time: ~4-6 hours on P100, ~6-10 hours on T4
     """
 
     # Larger model architecture
@@ -214,12 +214,17 @@ class ScaledConfig(ProductionConfig):
     block_size = 1024
 
     # MORE TRAINING - Critical for time embeddings to learn!
-    num_epochs = 10         # 5x vs Colab
+    num_epochs = 3          # 1.5x vs Colab (balanced for time)
 
     # Filtered WikiText-103 dataset (sentences with 10-30 tokens)
-    # This is a good balance: bigger than WikiText-2, but filtered for quality
+    # LIMITED to 100k samples for reasonable training time
     dataset_name = "carlosejimenez/wikitext-103-raw-v1_sents_min_len10_max_len30"
     dataset_config = None  # Custom dataset doesn't need config
+
+    # LIMIT dataset size for reasonable training time
+    # 100k samples * 3 epochs = 300k sample-epochs (4x colab's 72k)
+    max_train_samples = 100_000  # 3x WikiText-2, reasonable training time
+    max_eval_samples = 10_000    # 10% for validation
 
     # Evaluation
     eval_steps = 500        # Adjust based on dataset size
@@ -230,6 +235,7 @@ class ScaledConfig(ProductionConfig):
     preprocessing_num_workers = 4
 
     # Model size: ~355M parameters (GPT-2 small scale)
+    # Training time estimate: ~10-12 hours on P100
 
 
 class FastDebugConfig(ProductionConfig):

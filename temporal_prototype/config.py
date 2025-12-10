@@ -200,13 +200,13 @@ class ScaledConfig(ProductionConfig):
     Training time: ~1.5-2 hours on P100 (TEMPORAL only, no baseline)
     """
 
-    # Larger model architecture
-    content_dim = 384       # +50% vs Colab
-    time_dim = 384          # +50% vs Colab
-    total_dim = 768         # GPT-2 small size
-    n_layers = 12           # 2x vs Colab (standard for GPT-2 small)
-    n_heads = 12            # Matches total_dim
-    ff_dim = 3072           # 4x total_dim (standard)
+    # Medium model architecture (faster training, still larger than colab)
+    content_dim = 320       # +25% vs Colab (was 384)
+    time_dim = 320          # +25% vs Colab (was 384)
+    total_dim = 640         # Medium size (was 768)
+    n_layers = 8            # 1.3x vs Colab (was 12)
+    n_heads = 8             # Matches total_dim
+    ff_dim = 2560           # 4x total_dim (standard)
 
     # Training batches - OPTIMIZED FOR 16GB VRAM
     batch_size = 8          # Good for P100
@@ -215,7 +215,7 @@ class ScaledConfig(ProductionConfig):
     block_size = 512        # Match max_seq_length
 
     # MORE EPOCHS - Small dataset, deep training
-    num_epochs = 10         # 5x vs colab (WikiText-2 is small, so train longer)
+    num_epochs = 5          # 2.5x vs colab (balanced for time - completes in ~5.5 hours)
 
     # WikiText-2 dataset (small, fast, well-tested)
     dataset_name = "wikitext"

@@ -16,8 +16,10 @@ SOTA Implementation:
 - Evaluation: Perplexity + time embedding analysis
 
 Usage:
-  python run_colab.py              # Use default seed (42)
-  python run_colab.py --seed 123   # Use specific seed
+  python run_colab.py                          # Default: colab config, seed 42
+  python run_colab.py --seed 123               # Use specific seed
+  python run_colab.py --config scaled          # Use scaled config for comprehensive validation
+  python run_colab.py --config scaled --seed 777  # Combine config and seed
 """
 
 import os
@@ -71,9 +73,13 @@ def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description='Run TEMPORAL training with reproducible seeds')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility (default: 42)')
+    parser.add_argument('--config', type=str, default='colab',
+                        choices=['production', 'colab', 'scaled', 'debug'],
+                        help='Configuration preset (colab: fast validation, scaled: comprehensive)')
     args = parser.parse_args()
 
     seed = args.seed
+    config_name = args.config
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Open output file for appending
@@ -89,11 +95,13 @@ def main():
     with open(output_file, 'a') as f:
         f.write("\n" + "="*80 + "\n")
         f.write(f"NEW RUN: {timestamp}\n")
+        f.write(f"CONFIG: {config_name}\n")
         f.write(f"SEED: {seed}\n")
         f.write("="*80 + "\n\n")
 
     print_section("TEMPORAL: Production-Grade Self-Learning Architecture")
     log_and_print(f"Run timestamp: {timestamp}")
+    log_and_print(f"Configuration: {config_name}")
     log_and_print(f"Random seed: {seed}\n")
     log_and_print("This will train both TEMPORAL and Baseline models using SOTA components.\n")
     log_and_print("Features:")
@@ -103,7 +111,14 @@ def main():
     log_and_print("  ✓ Mixed precision training (BF16)")
     log_and_print("  ✓ Production-grade training loop")
     log_and_print(f"  ✓ Outputs saved to: {output_file}")
-    log_and_print("\nEstimated time: 30-60 minutes on GPU, 2-3 hours on CPU\n")
+
+    # Estimate time based on config
+    if config_name == 'scaled':
+        log_and_print("\nEstimated time: 3-5 hours on P100 GPU, 6-8 hours on T4 GPU\n")
+    elif config_name == 'debug':
+        log_and_print("\nEstimated time: 2-5 minutes\n")
+    else:
+        log_and_print("\nEstimated time: 30-60 minutes on GPU, 2-3 hours on CPU\n")
 
     # Check environment
     check_environment()
@@ -113,13 +128,13 @@ def main():
     log_and_print("This model has self-learning time embeddings that discover")
     log_and_print("temporal patterns through gradients, NOT hardcoded rules!\n")
 
-    run_cmd(f"python train.py --config colab --model-type temporal --seed {seed}")
+    run_cmd(f"python train.py --config {config_name} --model-type temporal --seed {seed}")
 
     # Train Baseline model
     print_section("Step 2/3: Training Baseline Model")
     log_and_print("Standard transformer without time embeddings (for comparison)\n")
 
-    run_cmd(f"python train.py --config colab --model-type baseline --seed {seed}")
+    run_cmd(f"python train.py --config {config_name} --model-type baseline --seed {seed}")
 
     # Analyze results
     print_section("Step 3/3: Analysis")

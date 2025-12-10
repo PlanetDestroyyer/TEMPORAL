@@ -166,9 +166,10 @@ python run_colab.py --config scaled --seed 42
 - **3 epochs** (1.5x current)
 - **Filtered WikiText-103** dataset (limited to 100k samples, 3x WikiText-2)
 - **~355M parameters** (GPT-2 small scale)
+- **Optimized**: 512 seq len, batch 8, grad accum 4 (4x faster!)
 - **Training volume**: 300k sample-epochs (4x colab's 72k)
 - **Expected**: 1-3% improvement (vs 0.8%)
-- **Time**: 4-6 hours on P100, 6-10 hours on T4
+- **Time**: 3-5 hours on P100, 5-8 hours on T4
 
 ---
 

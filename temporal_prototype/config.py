@@ -193,10 +193,10 @@ class ScaledConfig(ProductionConfig):
     This config is designed to show stronger TEMPORAL advantages:
     - Larger model (more capacity to learn time patterns)
     - More training (time embeddings need experience to learn)
-    - Limited dataset size for reasonable training time
+    - Optimized for speed: shorter sequences, less accumulation
 
     Suitable for: Kaggle P100, Colab Pro, or any GPU with 16GB+ VRAM
-    Training time: ~4-6 hours on P100, ~6-10 hours on T4
+    Training time: ~3-5 hours on P100, ~5-8 hours on T4
     """
 
     # Larger model architecture
@@ -207,11 +207,11 @@ class ScaledConfig(ProductionConfig):
     n_heads = 12            # Matches total_dim
     ff_dim = 3072           # 4x total_dim (standard)
 
-    # Training batches
-    batch_size = 4          # Same as Colab (memory constraint)
-    gradient_accumulation_steps = 16  # 2x vs Colab = effective batch 64
-    max_seq_length = 1024   # Longer context
-    block_size = 1024
+    # Training batches - OPTIMIZED FOR SPEED
+    batch_size = 8          # 2x colab (more throughput)
+    gradient_accumulation_steps = 4  # Reduced for speed (effective batch 32)
+    max_seq_length = 512    # Shorter sequences = 2x faster
+    block_size = 512        # Match max_seq_length
 
     # MORE TRAINING - Critical for time embeddings to learn!
     num_epochs = 3          # 1.5x vs Colab (balanced for time)
@@ -235,7 +235,9 @@ class ScaledConfig(ProductionConfig):
     preprocessing_num_workers = 4
 
     # Model size: ~355M parameters (GPT-2 small scale)
-    # Training time estimate: ~10-12 hours on P100
+    # Optimizations: 512 seq len (2x faster), batch 8, grad accum 4
+    # Expected speed: ~4-5 it/s (4x faster than 1024 seq len)
+    # Training time estimate: ~3-5 hours on P100
 
 
 class FastDebugConfig(ProductionConfig):

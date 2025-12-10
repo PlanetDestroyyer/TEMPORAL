@@ -45,7 +45,11 @@ def load_and_prepare_dataset(config):
         elif config.dataset_name == "c4":
             dataset = load_dataset("allenai/c4", "en", streaming=True)
         else:
-            dataset = load_dataset(config.dataset_name, config.dataset_config)
+            # Custom dataset from HuggingFace
+            if config.dataset_config:
+                dataset = load_dataset(config.dataset_name, config.dataset_config)
+            else:
+                dataset = load_dataset(config.dataset_name)
 
         print(f"✓ Dataset loaded successfully")
 

@@ -14,11 +14,17 @@ SOTA Implementation:
 - Model: Self-learning time embeddings (gradient-based)
 - Training: Mixed precision, gradient accumulation
 - Evaluation: Perplexity + time embedding analysis
+
+Usage:
+  python run_colab.py              # Use default seed (42)
+  python run_colab.py --seed 123   # Use specific seed
 """
 
 import os
 import sys
 import subprocess
+import argparse
+from datetime import datetime
 
 def print_section(title):
     print("\n" + "="*70)
@@ -62,31 +68,58 @@ def check_environment():
         sys.exit(1)
 
 def main():
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='Run TEMPORAL training with reproducible seeds')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility (default: 42)')
+    args = parser.parse_args()
+
+    seed = args.seed
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Open output file for appending
+    output_file = "output.txt"
+
+    def log_and_print(msg):
+        """Print to console and write to file"""
+        print(msg)
+        with open(output_file, 'a') as f:
+            f.write(msg + '\n')
+
+    # Write header to output file
+    with open(output_file, 'a') as f:
+        f.write("\n" + "="*80 + "\n")
+        f.write(f"NEW RUN: {timestamp}\n")
+        f.write(f"SEED: {seed}\n")
+        f.write("="*80 + "\n\n")
+
     print_section("TEMPORAL: Production-Grade Self-Learning Architecture")
-    print("This will train both TEMPORAL and Baseline models using SOTA components.\n")
-    print("Features:")
-    print("  ✓ Self-learning time embeddings (gradient-based, NOT hardcoded)")
-    print("  ✓ WikiText-103 dataset (or WikiText-2 for faster runs)")
-    print("  ✓ SOTA components: RMSNorm, SwiGLU, Flash Attention")
-    print("  ✓ Mixed precision training (BF16)")
-    print("  ✓ Production-grade training loop")
-    print("\nEstimated time: 30-60 minutes on GPU, 2-3 hours on CPU\n")
+    log_and_print(f"Run timestamp: {timestamp}")
+    log_and_print(f"Random seed: {seed}\n")
+    log_and_print("This will train both TEMPORAL and Baseline models using SOTA components.\n")
+    log_and_print("Features:")
+    log_and_print("  ✓ Self-learning time embeddings (gradient-based, NOT hardcoded)")
+    log_and_print("  ✓ WikiText-103 dataset (or WikiText-2 for faster runs)")
+    log_and_print("  ✓ SOTA components: RMSNorm, SwiGLU, Flash Attention")
+    log_and_print("  ✓ Mixed precision training (BF16)")
+    log_and_print("  ✓ Production-grade training loop")
+    log_and_print(f"  ✓ Outputs saved to: {output_file}")
+    log_and_print("\nEstimated time: 30-60 minutes on GPU, 2-3 hours on CPU\n")
 
     # Check environment
     check_environment()
 
     # Train TEMPORAL model
     print_section("Step 1/3: Training TEMPORAL Model")
-    print("This model has self-learning time embeddings that discover")
-    print("temporal patterns through gradients, NOT hardcoded rules!\n")
+    log_and_print("This model has self-learning time embeddings that discover")
+    log_and_print("temporal patterns through gradients, NOT hardcoded rules!\n")
 
-    run_cmd("python train.py --config colab --model-type temporal")
+    run_cmd(f"python train.py --config colab --model-type temporal --seed {seed}")
 
     # Train Baseline model
     print_section("Step 2/3: Training Baseline Model")
-    print("Standard transformer without time embeddings (for comparison)\n")
+    log_and_print("Standard transformer without time embeddings (for comparison)\n")
 
-    run_cmd("python train.py --config colab --model-type baseline")
+    run_cmd(f"python train.py --config colab --model-type baseline --seed {seed}")
 
     # Analyze results
     print_section("Step 3/3: Analysis")
@@ -141,14 +174,22 @@ def main():
 
     # Final summary
     print_section("COMPLETE!")
-    print("Results saved to:")
-    print("  - Checkpoints: checkpoints/temporal_production/")
-    print("  - Logs: logs/temporal_production/")
-    print("\nNext steps:")
-    print("  1. Compare TEMPORAL vs Baseline perplexity")
-    print("  2. Analyze time embedding patterns")
-    print("  3. Visualize learned representations")
-    print("\nRead the checkpoints to see final models!")
+    log_and_print("\n" + "="*70)
+    log_and_print("FINAL RESULTS SUMMARY")
+    log_and_print("="*70)
+    log_and_print(f"Seed used: {seed}")
+    log_and_print(f"Timestamp: {timestamp}")
+    log_and_print("\nResults saved to:")
+    log_and_print("  - Checkpoints: checkpoints/temporal_production/")
+    log_and_print("  - Logs: logs/temporal_production/")
+    log_and_print(f"  - Output file: {output_file}")
+    log_and_print("\nNext steps:")
+    log_and_print("  1. Compare TEMPORAL vs Baseline perplexity in output.txt")
+    log_and_print("  2. Run with different seeds for validation")
+    log_and_print("  3. Run test cases to validate inference-time learning")
+    log_and_print("\nTo reproduce with different seed:")
+    log_and_print(f"  python run_colab.py --seed {seed + 100}")
+    log_and_print("\n✅ Run complete!\n")
 
 
 if __name__ == "__main__":
